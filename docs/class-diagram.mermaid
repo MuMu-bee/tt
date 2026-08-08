@@ -1,0 +1,131 @@
+classDiagram
+  class RequestContext {
+    +string request_id
+    +string task_id
+    +string parent_request_id
+    +RequestSource source
+    +string created_at
+    +AbortSignal signal
+    +Record~string,string~ metadata
+  }
+  class VaultFile {
+    +string path
+    +string basename
+    +string extension
+    +number ctime
+    +number mtime
+    +Record~string,unknown~ frontmatter
+    +string[] tags
+    +Record~string,number~ linksOut
+  }
+  class VaultPort {
+    <<interface>>
+    +listMarkdownFiles(ctx) Promise~VaultFile[]~
+    +read(path,ctx) Promise~string~
+    +exists(path,ctx) Promise~boolean~
+    +ensureFolder(path,ctx) Promise~void~
+    +write(path,content,ctx) Promise~void~
+  }
+  class IndexHit {
+    +string path
+    +string title
+    +string snippet
+    +number score
+  }
+  class IndexPort {
+    <<interface>>
+    +search(query,options,ctx) Promise~IndexHit[]~
+    +invalidate(path,ctx) Promise~void~
+    +availability() Availability
+  }
+  class ModelRequest {
+    +string model
+    +Message[] messages
+    +boolean stream
+  }
+  class ModelPort {
+    <<interface>>
+    +complete(input,ctx,onDelta) Promise~ModelResult~
+    +availability() Availability
+  }
+  class NetworkRequest {
+    +string url
+    +string method
+    +Record~string,string~ headers
+    +string body
+  }
+  class NetworkResponse {
+    +number status
+    +Record~string,string~ headers
+    +string body
+  }
+  class NetworkPort {
+    <<interface>>
+    +request(input,ctx) Promise~NetworkResponse~
+    +availability() Availability
+  }
+  class PublishRequest {
+    +string path
+    +string content
+    +PublishKind kind
+    +boolean overwrite
+  }
+  class PublishedArtifact {
+    +string path
+    +string request_id
+  }
+  class MemoryPublishPort {
+    <<interface>>
+    +publish(input,ctx) Promise~PublishedArtifact~
+  }
+  class DashboardService {
+    -VaultScanner scanner
+    -FeedService feeds
+    +load(force,ctx) Promise~DashboardLoadResult~
+    +scanVault(ctx) Promise~DashboardLoadResult~
+  }
+  class VaultScanner {
+    -VaultPort vault
+    +scan(today,ctx) Promise~DashboardLoadResult~
+  }
+  class FeedService {
+    -NetworkPort network
+    -CacheStore cache
+    +loadAll(force,ctx) Promise~FeedBundle~
+  }
+  class AgentActionService {
+    -DashboardService dashboard
+    -MemoryPublishPort publisher
+    -ModelPort model
+    +createDiary(ctx) Promise~PublishedArtifact~
+    +ingestInbox(content,ctx) Promise~PublishedArtifact~
+    +runVaultLint(ctx) Promise~PublishedArtifact~
+    +runDeepResearch(ctx) Promise~ActionResult~
+  }
+  class ObsidianVaultAdapter {
+    <<adapter>>
+    -App app
+  }
+  class ObsidianNetworkAdapter {
+    <<adapter>>
+  }
+  class UnavailableModelAdapter {
+    <<adapter>>
+  }
+  DashboardService --> VaultScanner
+  DashboardService --> FeedService
+  VaultScanner --> VaultPort
+  FeedService --> NetworkPort
+  FeedService --> CacheStore
+  AgentActionService --> DashboardService
+  AgentActionService --> MemoryPublishPort
+  AgentActionService --> ModelPort
+  ObsidianVaultAdapter ..|> VaultPort
+  ObsidianNetworkAdapter ..|> NetworkPort
+  UnavailableModelAdapter ..|> ModelPort
+  MemoryPublishPort --> PublishRequest
+  MemoryPublishPort --> PublishedArtifact
+  VaultPort --> RequestContext
+  IndexPort --> RequestContext
+  ModelPort --> RequestContext
+  NetworkPort --> RequestContext

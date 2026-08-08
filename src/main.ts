@@ -4,6 +4,7 @@ import {
 	DEFAULT_SETTINGS,
 	AgentDashboardSettings,
 } from './settings';
+import { UnavailableModel } from './adapters/unavailableModel';
 import { AgentActionService } from './services/agentActionService';
 import { DashboardService } from './services/dashboardService';
 import {
@@ -18,11 +19,8 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.loadSettings();
 
 		const dashboardService = new DashboardService(this.app);
-		const actionService = new AgentActionService(
-			this.app,
-			dashboardService,
-			() => this.settings.hermesPath,
-		);
+		const model = new UnavailableModel();
+		const actionService = new AgentActionService(this.app, dashboardService, model);
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,

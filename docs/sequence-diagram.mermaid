@@ -1,0 +1,35 @@
+sequenceDiagram
+  participant UI as AgentDashboardView
+  participant Root as main.ts
+  participant DS as DashboardService
+  participant VS as VaultScanner
+  participant VP as VaultPort
+  participant FS as FeedService
+  participant NP as NetworkPort
+  participant AS as AgentActionService
+  participant MP as ModelPort
+  participant MEM as MemoryPublishPort
+  UI->>Root: onload/loadSettings()
+  Root->>Root: compose adapters and services (no Hermes)
+  UI->>DS: load(force, ctx{request_id})
+  par Vault metrics
+    DS->>VS: scan(today, ctx)
+    VS->>VP: listMarkdownFiles(ctx)
+    VP-->>VS: VaultFile[]
+  and External feeds
+    DS->>FS: loadAll(force, ctx)
+    FS->>NP: request(feedUrl, ctx)
+    NP-->>FS: NetworkResponse or cached data
+  end
+  DS-->>UI: DashboardLoadResult
+  UI->>AS: runDeepResearch(ctx{task_id})
+  AS->>MP: availability()
+  alt phase0 disabled or model unavailable
+    MP-->>AS: unavailable
+    AS-->>UI: disabled result with request_id
+  else future enabled path
+    AS->>MP: complete(request, ctx)
+    MP-->>AS: ModelResult
+    AS->>MEM: publish(report, ctx)
+    MEM-->>AS: PublishedArtifact(path, request_id)
+  end

@@ -14,6 +14,7 @@ import {
 	matchesDashboardQuery,
 } from '../services/dashboardMath';
 import { InboxIngestModal } from '../ui/InboxIngestModal';
+import { createRequestContext, type RequestContext } from '../application/requestContext';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
 
@@ -656,25 +657,26 @@ export class AgentDashboardView extends ItemView {
 		this.setFeedback(`${action.label} 正在执行。`);
 
 		try {
+			const context: RequestContext = createRequestContext('user');
 			let path: string | null = null;
 			switch (action.id) {
 				case 'new-diary':
-					path = await this.actionService.createDiary();
+					path = await this.actionService.createDiary(context);
 					break;
 				case 'deep-research':
-					path = await this.actionService.runDeepResearch();
+					path = await this.actionService.runDeepResearch(context);
 					break;
 				case 'pull-rss':
-					path = await this.actionService.pullRssSummary();
+					path = await this.actionService.pullRssSummary(context);
 					break;
 				case 'github-feeds':
-					path = await this.actionService.pullGitHubPicks();
+					path = await this.actionService.pullGitHubPicks(context);
 					break;
 				case 'inbox-ingest':
-					this.openInboxModal();
+					this.openInboxModal(context);
 					return;
 				case 'vault-lint':
-					path = await this.actionService.runVaultLint();
+					path = await this.actionService.runVaultLint(context);
 					break;
 			}
 
@@ -695,10 +697,10 @@ export class AgentDashboardView extends ItemView {
 		}
 	}
 
-	private openInboxModal(): void {
+	private openInboxModal(context: RequestContext = createRequestContext('user')): void {
 		this.setFeedback('等待输入要导入 Inbox 的内容。');
 		new InboxIngestModal(this.app, async (content) => {
-			const path = await this.actionService.ingestInbox(content);
+			const path = await this.actionService.ingestInbox(content, context);
 			if (!this.isClosed) {
 				this.setFeedback(`已导入：${path}`);
 				await this.refresh();

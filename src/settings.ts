@@ -5,12 +5,13 @@ import type { AgentConfig } from './data/dashboardTypes';
 import { DEFAULT_AGENT_CONFIG } from './data/dashboardTypes';
 
 export interface AgentDashboardSettings {
-	hermesPath: string;
+	/** Enables optional phase-zero actions; disabled by default for safe startup. */
+	phase0ActionsEnabled: boolean;
 	agent: AgentConfig;
 }
 
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
-	hermesPath: '',
+	phase0ActionsEnabled: false,
 	agent: { ...DEFAULT_AGENT_CONFIG },
 };
 
@@ -25,23 +26,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('智能体命令')
-			.setHeading();
-
-		new Setting(containerEl)
-			.setName('Hermes 命令路径')
-			.setDesc('桌面端执行深度研究和信息流摘要时使用。留空则自动查找 hermes 命令。')
-			.addText((text) =>
-				text
-					.setPlaceholder('Hermes')
-					.setValue(this.plugin.settings.hermesPath)
-					.onChange(async (value) => {
-						this.plugin.settings.hermesPath = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
 
 		// ===== 墨忆台 Agent 设置 =====
 		new Setting(containerEl)

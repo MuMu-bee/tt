@@ -1,8 +1,13 @@
-import { App, Platform, TFile, Notice, normalizePath } from 'obsidian';
+import { App, TFile, Notice, normalizePath } from 'obsidian';
 import type {
 	GitHubFeedItem,
 	RssFeedItem,
 } from '../data/dashboardTypes';
+import type { ModelPort } from '../ports/modelPort';
+import {
+	createRequestContext,
+	type RequestContext,
+} from '../application/requestContext';
 import { toDateKey } from './dashboardMath';
 import { CacheStore } from './cacheStore';
 import { DashboardService } from './dashboardService';
@@ -13,12 +18,13 @@ export class AgentActionService {
 	constructor(
 		private readonly app: App,
 		private readonly dashboard: DashboardService,
-		private readonly getHermesPath: () => string,
+		private readonly model: ModelPort,
 	) {
 		this.writer = new CacheStore(app.vault);
 	}
 
-	async createDiary(): Promise<string> {
+	async createDiary(context: RequestContext = createRequestContext()): Promise<string> {
+		void context;
 		const date = toDateKey(new Date());
 		await this.writer.ensureFolder('Daily');
 		const path = normalizePath(`Daily/${date}.md`);
@@ -30,27 +36,32 @@ export class AgentActionService {
 		return path;
 	}
 
-	async runDeepResearch(): Promise<string> {
+	async runDeepResearch(context: RequestContext = createRequestContext()): Promise<string> {
 		const date = toDateKey(new Date());
-		const report = await this.runHermes(
+		const report = await this.generateReport(
 			'研究今天的 AI Agent 资讯，输出 Markdown 报告',
+			context,
 		);
 		return this.writeReport(`deep-research-${date}.md`, report);
 	}
 
-	async pullRssSummary(): Promise<string> {
+	async pullRssSummary(context: RequestContext = createRequestContext()): Promise<string> {
 		const items = await this.dashboard.getFeeds().getRssFeed(true);
-		const report = await this.runHermes(this.buildRssPrompt(items));
+		const report = await this.generateReport(this.buildRssPrompt(items), context);
 		return this.writeReport(`rss-summary-${toDateKey(new Date())}.md`, report);
 	}
 
-	async pullGitHubPicks(): Promise<string> {
+	async pullGitHubPicks(context: RequestContext = createRequestContext()): Promise<string> {
 		const items = await this.dashboard.getFeeds().getGitHubFeed(true);
-		const report = await this.runHermes(this.buildGitHubPrompt(items));
+		const report = await this.generateReport(this.buildGitHubPrompt(items), context);
 		return this.writeReport(`github-picks-${toDateKey(new Date())}.md`, report);
 	}
 
-	async ingestInbox(content: string): Promise<string> {
+	async ingestInbox(
+		content: string,
+		context: RequestContext = createRequestContext(),
+	): Promise<string> {
+		void context;
 		const trimmed = content.trim();
 		if (!trimmed) {
 			throw new Error('请输入要导入 Inbox 的内容。');
@@ -73,7 +84,8 @@ export class AgentActionService {
 		return path;
 	}
 
-	async runVaultLint(): Promise<string> {
+	async runVaultLint(context: RequestContext = createRequestContext()): Promise<string> {
+		void context;
 		const result = await this.dashboard.scanVault();
 		const body = [
 			`# Vault lint report`,
@@ -92,38 +104,8 @@ export class AgentActionService {
 		return this.writeReport(`vault-lint-${toDateKey(new Date())}.md`, body);
 	}
 
-	private async runHermes(prompt: string): Promise<string> {
-		if (!Platform.isDesktop) {
-			throw new Error('hermes 只能在桌面端运行。');
-		}
-
-		const command = this.getHermesPath().trim() || 'hermes';
-		const { spawn } = await import('node:child_process');
-		return new Promise<string>((resolve, reject) => {
-			const child = spawn(command, ['-p', prompt], { windowsHide: true });
-			let stdout = '';
-			let stderr = '';
-			child.stdout?.on('data', (chunk: Uint8Array | string) => {
-				stdout += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-			});
-			child.stderr?.on('data', (chunk: Uint8Array | string) => {
-				stderr += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
-			});
-			child.once('error', (error: Error & { code?: string }) => {
-				if (error.code === 'ENOENT') {
-					reject(new Error('找不到 hermes，请在插件设置中配置 hermes 命令路径。'));
-					return;
-				}
-				reject(error);
-			});
-			child.once('close', (code) => {
-				if (code === 0) {
-					resolve(stdout.trim());
-					return;
-				}
-				reject(new Error(`hermes 执行失败（${code ?? 'unknown'}）：${stderr.trim()}`));
-			});
-		});
+	private async generateReport(prompt: string, context: RequestContext): Promise<string> {
+		return this.model.generate(prompt, context);
 	}
 
 	private async writeReport(fileName: string, content: string): Promise<string> {
