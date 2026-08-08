@@ -7,6 +7,10 @@ export interface IndexHit {
 	title: string;
 	snippet: string;
 	score: number;
+	matched_fields?: string[];
+	source?: 'keyword';
+	raw_hash?: string;
+	open_path?: string;
 }
 
 export interface IndexPort {

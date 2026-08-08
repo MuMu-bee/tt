@@ -5,6 +5,11 @@ import {
 	AgentDashboardSettings,
 } from './settings';
 import { UnavailableModel } from './adapters/unavailableModel';
+import { ObsidianVaultReader } from './adapters/obsidianVaultReader';
+import { InMemoryVaultIndex } from './adapters/in-memory-vault-index';
+import { SearchService } from './services/searchService';
+import { IndexLifecycleService } from './services/indexLifecycleService';
+import { createRequestContext } from './application/requestContext';
 import { AgentActionService } from './services/agentActionService';
 import { DashboardService } from './services/dashboardService';
 import {
@@ -19,17 +24,24 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.loadSettings();
 
 		const dashboardService = new DashboardService(this.app);
+		const reader = new ObsidianVaultReader(this.app);
+		const index = new InMemoryVaultIndex(reader);
+		const searchService = new SearchService(index);
+		const lifecycle = new IndexLifecycleService(reader, index);
+		void lifecycle.rebuild(createRequestContext('background-task')).catch(() => undefined);
 		const model = new UnavailableModel();
 		const actionService = new AgentActionService(this.app, dashboardService, model);
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
-			(leaf) => new AgentDashboardView(leaf, dashboardService, actionService),
+			(leaf) => new AgentDashboardView(leaf, dashboardService, actionService, searchService, lifecycle),
 		);
 
-		this.registerEvent(this.app.vault.on('create', () => this.refreshDashboardViews()));
-		this.registerEvent(this.app.vault.on('modify', () => this.refreshDashboardViews()));
-		this.registerEvent(this.app.vault.on('delete', () => this.refreshDashboardViews()));
+		this.registerEvent(this.app.vault.on('create', (file) => { void lifecycle.create(file.path); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('modify', (file) => { void lifecycle.modify(file.path); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('delete', (file) => { void lifecycle.delete(file.path); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void lifecycle.rename(oldPath, file.path); this.refreshDashboardViews(); }));
+		this.addCommand({ id: 'rebuild-memory-index', name: '重建知识库索引', callback: () => { void lifecycle.rebuild(createRequestContext('user')).catch(() => undefined); } });
 
 		const ribbonIcon = this.addRibbonIcon(
 			'layout-dashboard',

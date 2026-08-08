@@ -1,18 +1,23 @@
-import { App, TFile, Vault } from 'obsidian';
+import { App, TFile } from 'obsidian';
 import type { ChatReference } from '../data/dashboardTypes';
+import type { SearchService } from './searchService';
 
 /**
  * Vault context injection: search vault for notes relevant to a query,
  * read their content, and assemble a context string for the LLM.
  */
 export class VaultContextService {
-	constructor(private readonly app: App) {}
+	constructor(private readonly app: App, private readonly searchService?: SearchService) {}
 
 	/**
 	 * Search vault files by keyword matching (title + content).
 	 * Returns top N references with snippets.
 	 */
 	async search(query: string, maxResults = 5): Promise<ChatReference[]> {
+		if (this.searchService) {
+			const results = await this.searchService.query({ query, limit: maxResults });
+			return results.map((result) => ({ path: result.path, title: result.title, snippet: result.snippet }));
+		}
 		const keywords = this.extractKeywords(query);
 		if (keywords.length === 0) {
 			return [];

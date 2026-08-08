@@ -25,12 +25,16 @@ export class InMemoryVaultIndex implements IndexPort {
 	}
 
 	async buildAll(documents: VaultDocument[], _context: RequestContext): Promise<void> {
-		this.entries.clear();
+		// Build off to the side and swap only after every document has been indexed.
+		// This preserves the previous ready index if parsing/yielding fails midway.
+		const nextEntries = new Map<string, KeywordIndexEntry>();
 		for (let index = 0; index < documents.length; index += 1) {
 			const document = documents[index];
-			if (document) this.entries.set(document.path, createKeywordEntry(document));
+			if (document) nextEntries.set(document.path, createKeywordEntry(document));
 			if ((index + 1) % this.batchSize === 0) await this.yieldHook();
 		}
+		this.entries.clear();
+		nextEntries.forEach((entry, path) => this.entries.set(path, entry));
 		this.ready = true;
 	}
 
@@ -63,7 +67,7 @@ export class InMemoryVaultIndex implements IndexPort {
 		if (!this.ready) await this.rebuild(context);
 		const results = searchKeywordEntries(this.entries.values(), query);
 		if (maybeContext) {
-			return results.map((result) => ({ path: result.path, title: result.title, snippet: result.snippet, score: result.score }));
+			return results.map((result) => ({ path: result.path, title: result.title, snippet: result.snippet, score: result.score, matched_fields: result.matched_fields, source: result.source, raw_hash: result.raw_hash, open_path: result.open_path }));
 		}
 		return results;
 	}

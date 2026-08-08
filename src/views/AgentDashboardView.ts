@@ -15,6 +15,8 @@ import {
 } from '../services/dashboardMath';
 import { InboxIngestModal } from '../ui/InboxIngestModal';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
+import { SearchService, type SearchResult } from '../services/searchService';
+import { IndexLifecycleService } from '../services/indexLifecycleService';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
 
@@ -48,6 +50,9 @@ export class AgentDashboardView extends ItemView {
 	private feedListEl: HTMLElement | null = null;
 	private taskFilterEmptyEl: HTMLElement | null = null;
 	private feedFilterEmptyEl: HTMLElement | null = null;
+	private knowledgeResultsEl: HTMLElement | null = null;
+	private knowledgeStatusEl: HTMLElement | null = null;
+	private knowledgeQuery = '';
 
 	private liveLabelEl: HTMLSpanElement | null = null;
 	private syncTimeEl: HTMLSpanElement | null = null;
@@ -59,6 +64,8 @@ export class AgentDashboardView extends ItemView {
 		leaf: WorkspaceLeaf,
 		private readonly dashboard: DashboardService,
 		private readonly actionService: AgentActionService,
+		private readonly searchService: SearchService,
+		private readonly lifecycle: IndexLifecycleService,
 	) {
 		super(leaf);
 	}
@@ -98,6 +105,8 @@ export class AgentDashboardView extends ItemView {
 		this.feedListEl = null;
 		this.taskFilterEmptyEl = null;
 		this.feedFilterEmptyEl = null;
+		this.knowledgeResultsEl = null;
+		this.knowledgeStatusEl = null;
 		return Promise.resolve();
 	}
 
@@ -183,10 +192,66 @@ export class AgentDashboardView extends ItemView {
 		this.renderActions(content);
 		this.renderStats(content, data);
 		this.renderHeatmap(content, data);
+		this.renderKnowledgeSearch(content);
 
 		const lowerGrid = content.createDiv({ cls: 'agent-dashboard-lower-grid' });
 		this.renderTasks(lowerGrid, data);
 		this.renderGitHubFeed(lowerGrid, data);
+	}
+
+	private renderKnowledgeSearch(parent: HTMLElement): void {
+		const card = parent.createEl('section', { cls: 'agent-dashboard-surface agent-dashboard-knowledge-card', attr: { id: 'agent-dashboard-knowledge', 'aria-labelledby': 'agent-dashboard-knowledge-title' } });
+		const header = card.createDiv({ cls: 'agent-dashboard-surface-header compact' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '只读关键词检索' });
+		heading.createEl('h2', { attr: { id: 'agent-dashboard-knowledge-title' }, text: '知识库搜索' });
+		this.knowledgeStatusEl = heading.createEl('p', { text: this.lifecycleStatusText() });
+		const rebuild = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		rebuild.createSpan({ text: '重建索引' });
+		this.registerDomEvent(rebuild, 'click', () => { rebuild.disabled = true; void this.lifecycle.rebuild(createRequestContext('user')).then(() => { this.knowledgeStatusEl?.setText(this.lifecycleStatusText()); }).catch((error: unknown) => { this.knowledgeStatusEl?.setText(`重建失败：${this.getErrorMessage(error)}`); }).finally(() => { rebuild.disabled = false; }); });
+		const input = card.createEl('input', { cls: 'agent-dashboard-knowledge-input', attr: { type: 'search', placeholder: '搜索笔记标题、路径、标签或正文', 'aria-label': '搜索知识库' } });
+		input.value = this.knowledgeQuery;
+		this.registerDomEvent(input, 'input', () => { this.knowledgeQuery = input.value; void this.loadKnowledgeResults(); });
+		this.knowledgeResultsEl = card.createDiv({ cls: 'agent-dashboard-knowledge-results' });
+		if (this.knowledgeQuery.trim()) void this.loadKnowledgeResults(); else this.renderKnowledgeEmpty('输入关键词开始搜索。');
+	}
+
+	private async loadKnowledgeResults(): Promise<void> {
+		if (!this.knowledgeResultsEl) return;
+		const query = this.knowledgeQuery.trim();
+		if (!query) { this.renderKnowledgeEmpty('输入关键词开始搜索。'); return; }
+		this.renderKnowledgeEmpty('正在搜索…');
+		try {
+			const results = await this.searchService.query({ query, limit: 10, context: createRequestContext('user') });
+			if (!this.knowledgeResultsEl) return;
+			this.knowledgeResultsEl.empty();
+			if (results.length === 0) { this.renderKnowledgeEmpty('没有匹配的笔记。'); return; }
+			results.forEach((result) => this.renderKnowledgeResult(result));
+		} catch (error) { this.renderKnowledgeEmpty(`搜索失败：${this.getErrorMessage(error)}`); }
+	}
+
+	private renderKnowledgeResult(result: SearchResult): void {
+		if (!this.knowledgeResultsEl) return;
+		const row = this.knowledgeResultsEl.createEl('button', { cls: 'agent-dashboard-knowledge-result', attr: { type: 'button', 'aria-label': `打开 ${result.title}` } });
+		const copy = row.createDiv({ cls: 'agent-dashboard-knowledge-copy' });
+		copy.createEl('strong', { text: result.title });
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-path', text: result.path });
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-snippet', text: result.snippet });
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-meta', text: `${result.source} · ${result.matched_fields.join(', ')}${result.raw_hash ? ` · ${result.raw_hash.slice(0, 8)}` : ''}` });
+		this.registerDomEvent(row, 'click', () => { void this.openKnowledgeResult(result); });
+	}
+
+	private renderKnowledgeEmpty(message: string): void { this.knowledgeResultsEl?.empty(); this.knowledgeResultsEl?.createDiv({ cls: 'agent-dashboard-empty-state', text: message }); }
+
+	private lifecycleStatusText(): string {
+		const state = this.lifecycle.getState();
+		return state.status === 'rebuilding' ? `正在重建索引（${state.count} 篇）` : state.status === 'failed' ? `索引失败：${state.error ?? '未知错误'}` : `索引就绪 · ${state.count} 篇`;
+	}
+
+	private async openKnowledgeResult(result: SearchResult): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(result.open_path);
+		if (!(file instanceof TFile)) { this.setFeedback(`找不到笔记：${result.path}`); return; }
+		await this.app.workspace.getLeaf('tab').openFile(file);
 	}
 
 	private renderLoadingState(): void {
