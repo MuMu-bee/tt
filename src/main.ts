@@ -8,7 +8,7 @@ import { UnavailableModel } from './adapters/unavailableModel';
 import { ObsidianVaultReader } from './adapters/obsidianVaultReader';
 import { InMemoryVaultIndex } from './adapters/in-memory-vault-index';
 import { SearchService } from './services/searchService';
-import { IndexLifecycleService } from './services/indexLifecycleService';
+import { IndexLifecycleService, isMarkdownPath } from './services/indexLifecycleService';
 import { createRequestContext } from './application/requestContext';
 import { AgentActionService } from './services/agentActionService';
 import { DashboardService } from './services/dashboardService';
@@ -37,8 +37,8 @@ export default class AgentDashboardPlugin extends Plugin {
 			(leaf) => new AgentDashboardView(leaf, dashboardService, actionService, searchService, lifecycle),
 		);
 
-		this.registerEvent(this.app.vault.on('create', (file) => { void lifecycle.create(file.path); this.refreshDashboardViews(); }));
-		this.registerEvent(this.app.vault.on('modify', (file) => { void lifecycle.modify(file.path); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('create', (file) => { if (isMarkdownPath(file.path)) void lifecycle.create(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('modify', (file) => { if (isMarkdownPath(file.path)) void lifecycle.modify(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
 		this.registerEvent(this.app.vault.on('delete', (file) => { void lifecycle.delete(file.path); this.refreshDashboardViews(); }));
 		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { void lifecycle.rename(oldPath, file.path); this.refreshDashboardViews(); }));
 		this.addCommand({ id: 'rebuild-memory-index', name: '重建知识库索引', callback: () => { void lifecycle.rebuild(createRequestContext('user')).catch(() => undefined); } });

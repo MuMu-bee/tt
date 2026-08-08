@@ -62,6 +62,28 @@ test('failed rebuild preserves the previous ready index and searchable entries',
 	assert.deepEqual(reader.writes, []);
 });
 
+test('incremental failure records failed state and preserves indexed entries', async () => {
+	const reader = new MemoryReader({ 'a.md': '# Alpha\nlegacy' });
+	const index = new InMemoryVaultIndex(reader);
+	const lifecycle = new IndexLifecycleService(reader, index);
+	await lifecycle.rebuild(context);
+	reader.failPath = 'missing.md';
+	await assert.rejects(lifecycle.modify('missing.md', context), /read failed/);
+	assert.equal(lifecycle.getState().status, 'failed');
+	assert.match(lifecycle.getState().error ?? '', /read failed/);
+	assert.equal(lifecycle.getState().count, 1);
+	assert.equal((await index.search('legacy', context)).length, 1);
+});
+
+test('non-Markdown incremental paths are ignored safely', async () => {
+	const reader = new MemoryReader({ 'a.md': '# Alpha\nlegacy' });
+	const index = new InMemoryVaultIndex(reader);
+	const lifecycle = new IndexLifecycleService(reader, index);
+	await lifecycle.rebuild(context);
+	await lifecycle.modify('image.png', context);
+	assert.deepEqual(lifecycle.getState(), { status: 'ready', count: 1 });
+});
+
 test('failed staged build preserves entries and ready availability', async () => {
 	const reader = new MemoryReader({ 'a.md': '# Alpha\nlegacy' });
 	let shouldFail = false;

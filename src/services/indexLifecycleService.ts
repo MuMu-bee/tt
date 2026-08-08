@@ -11,6 +11,11 @@ export interface IndexLifecycleState {
 	error?: string;
 }
 
+/** Returns whether a Vault path is a Markdown note eligible for indexing. */
+export function isMarkdownPath(path: string): boolean {
+	return path.toLocaleLowerCase().endsWith('.md');
+}
+
 /** Coordinates safe full and incremental index updates without writing Vault. */
 export class IndexLifecycleService {
 	private state: IndexLifecycleState = { status: 'failed', count: 0 };
@@ -36,21 +41,25 @@ export class IndexLifecycleService {
 		return this.rebuildPromise;
 	}
 
-	async create(path: string, context?: RequestContext): Promise<void> { return this.enqueue(path, () => this.upsert(path, context)); }
-	async modify(path: string, context?: RequestContext): Promise<void> { return this.enqueue(path, () => this.upsert(path, context)); }
+	async create(path: string, context?: RequestContext): Promise<void> {
+		return this.enqueue(path, () => this.withIncrementalFailureState(() => this.upsert(path, context)));
+	}
+	async modify(path: string, context?: RequestContext): Promise<void> {
+		return this.enqueue(path, () => this.withIncrementalFailureState(() => this.upsert(path, context)));
+	}
 	async delete(path: string, context: RequestContext = createRequestContext('background-task')) {
-		return this.enqueue(path, async () => {
+		return this.enqueue(path, () => this.withIncrementalFailureState(async () => {
 			await this.index.invalidate(path, context);
 			if (this.indexedPaths.delete(path)) this.updateReadyCount(-1);
-		});
+		}));
 	}
 	async rename(oldPath: string, newPath: string, context: RequestContext = createRequestContext('background-task')) {
 		const key = `${oldPath}=>${newPath}`;
-		return this.enqueue(key, async () => {
+		return this.enqueue(key, () => this.withIncrementalFailureState(async () => {
 			await this.index.invalidate(oldPath, context);
 			if (this.indexedPaths.delete(oldPath)) this.updateReadyCount(-1);
 			await this.upsert(newPath, context);
-		});
+		}));
 	}
 
 	private async runRebuild(context: RequestContext, previous: IndexLifecycleState): Promise<void> {
@@ -58,7 +67,7 @@ export class IndexLifecycleService {
 			const paths = await this.reader.listMarkdownPaths(context);
 			const documents = [];
 			for (const path of paths) {
-				if (path.toLocaleLowerCase().endsWith('.md')) documents.push(parseVaultDocument(path, await this.reader.readMarkdown(path, context)));
+				if (isMarkdownPath(path)) documents.push(parseVaultDocument(path, await this.reader.readMarkdown(path, context)));
 			}
 			await this.indexBuildAll(documents, context);
 			this.indexedPaths = new Set(documents.map((document) => document.path));
@@ -75,7 +84,21 @@ export class IndexLifecycleService {
 		await rebuildable.buildAll(documents, context);
 	}
 
+	private async withIncrementalFailureState(operation: () => Promise<void>): Promise<void> {
+		try {
+			await operation();
+		} catch (error) {
+			this.state = {
+				status: 'failed',
+				count: this.indexedPaths.size,
+				error: error instanceof Error ? error.message : '增量索引更新失败',
+			};
+			throw error;
+		}
+	}
+
 	private async upsert(path: string, context = createRequestContext('background-task')): Promise<void> {
+		if (!isMarkdownPath(path)) return;
 		const file = await this.reader.readMarkdown(path, context);
 		const upsertable = this.index as IndexPort & { upsert?: (doc: ReturnType<typeof parseVaultDocument>, ctx: RequestContext) => Promise<void> };
 		if (!upsertable.upsert) throw new Error('索引不支持增量更新');
