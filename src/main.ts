@@ -109,11 +109,16 @@ export default class AgentDashboardPlugin extends Plugin {
 	onunload(): void {}
 
 	async loadSettings(): Promise<void> {
-		this.settings = Object.assign(
-			{},
-			DEFAULT_SETTINGS,
-			(await this.loadData()) as Partial<AgentDashboardSettings>,
-		);
+		const stored = (await this.loadData()) as Partial<AgentDashboardSettings> | null;
+		this.settings = {
+			...DEFAULT_SETTINGS,
+			...stored,
+			featureFlags: {
+				...DEFAULT_SETTINGS.featureFlags,
+				...(stored?.featureFlags ?? {}),
+				organize: { ...DEFAULT_SETTINGS.featureFlags.organize, ...(stored?.featureFlags?.organize ?? {}) },
+			},
+		};
 	}
 
 	async saveSettings(): Promise<void> {

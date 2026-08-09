@@ -5,6 +5,7 @@ export interface RequestContext {
 	actor: RequestActor;
 	created_at: string;
 	parent_request_id?: string;
+	child?: () => RequestContext;
 }
 
 /** Creates a request context for one observable operation. */
@@ -20,6 +21,7 @@ export function createRequestContext(
 	if (parentRequestId) {
 		context.parent_request_id = parentRequestId;
 	}
+	context.child = (): RequestContext => createRequestContext(context.actor, context.request_id);
 	return context;
 }
 

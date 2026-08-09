@@ -16,7 +16,7 @@ export class VaultContextService {
 	async search(query: string, maxResults = 5): Promise<ChatReference[]> {
 		if (this.searchService) {
 			const results = await this.searchService.query({ query, limit: maxResults });
-			return results.map((result) => ({ path: result.path, title: result.title, snippet: result.snippet }));
+			return results.map((result) => ({ path: result.path, title: result.title, snippet: result.snippet ?? '' }));
 		}
 		const keywords = this.extractKeywords(query);
 		if (keywords.length === 0) {

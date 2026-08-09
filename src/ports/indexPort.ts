@@ -21,4 +21,7 @@ export interface IndexPort {
 	): Promise<IndexHit[]>;
 	invalidate(path: string, context: RequestContext): Promise<void>;
 	availability(): Availability;
+	refresh?(paths: string[], context: RequestContext): Promise<import('../application/contracts').RefreshStatus>;
+	rebuild?(context: RequestContext): Promise<import('../application/contracts').RefreshStatus>;
+	health?(context: RequestContext): Promise<import('../application/contracts').Health>;
 }

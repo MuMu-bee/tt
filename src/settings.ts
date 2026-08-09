@@ -4,15 +4,20 @@ import type AgentDashboardPlugin from './main';
 import type { AgentConfig } from './data/dashboardTypes';
 import { DEFAULT_AGENT_CONFIG } from './data/dashboardTypes';
 
+import type { FeatureFlags } from './application/featureFlags';
+import { DEFAULT_FEATURE_FLAGS } from './application/featureFlags';
+
 export interface AgentDashboardSettings {
 	/** Enables optional phase-zero actions; disabled by default for safe startup. */
 	phase0ActionsEnabled: boolean;
 	agent: AgentConfig;
+	featureFlags: FeatureFlags;
 }
 
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
 	phase0ActionsEnabled: false,
 	agent: { ...DEFAULT_AGENT_CONFIG },
+	featureFlags: { ...DEFAULT_FEATURE_FLAGS, organize: { ...DEFAULT_FEATURE_FLAGS.organize } },
 };
 
 export class AgentDashboardSettingTab extends PluginSettingTab {

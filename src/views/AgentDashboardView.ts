@@ -15,7 +15,8 @@ import {
 } from '../services/dashboardMath';
 import { InboxIngestModal } from '../ui/InboxIngestModal';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
-import { SearchService, type SearchResult } from '../services/searchService';
+import { SearchService } from '../services/searchService';
+import type { SearchResult } from '../application/contracts';
 import { IndexLifecycleService } from '../services/indexLifecycleService';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
@@ -237,7 +238,8 @@ export class AgentDashboardView extends ItemView {
 		copy.createEl('strong', { text: result.title });
 		copy.createSpan({ cls: 'agent-dashboard-knowledge-path', text: result.path });
 		copy.createSpan({ cls: 'agent-dashboard-knowledge-snippet', text: result.snippet });
-		copy.createSpan({ cls: 'agent-dashboard-knowledge-meta', text: `${result.source} · ${result.matched_fields.join(', ')}${result.raw_hash ? ` · ${result.raw_hash.slice(0, 8)}` : ''}` });
+		const rawHash = typeof result.metadata?.raw_hash === 'string' ? result.metadata.raw_hash : undefined;
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-meta', text: `${result.source} · ${result.matched_fields.join(', ')}${rawHash ? ` · ${rawHash.slice(0, 8)}` : ''}` });
 		this.registerDomEvent(row, 'click', () => { void this.openKnowledgeResult(result); });
 	}
 
@@ -249,7 +251,8 @@ export class AgentDashboardView extends ItemView {
 	}
 
 	private async openKnowledgeResult(result: SearchResult): Promise<void> {
-		const file = this.app.vault.getAbstractFileByPath(result.open_path);
+		const openPath = typeof result.metadata?.open_path === 'string' ? result.metadata.open_path : result.path;
+		const file = this.app.vault.getAbstractFileByPath(openPath);
 		if (!(file instanceof TFile)) { this.setFeedback(`找不到笔记：${result.path}`); return; }
 		await this.app.workspace.getLeaf('tab').openFile(file);
 	}
