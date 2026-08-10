@@ -16,10 +16,27 @@ import {
 import { InboxIngestModal } from '../ui/InboxIngestModal';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
 import { SearchService } from '../services/searchService';
-import type { SearchResult } from '../application/contracts';
+import type { AuditRecord, Proposal, SearchResult } from '../application/contracts';
+import type { PersistenceRuntimeStatus } from '../application/persistenceContracts';
 import { IndexLifecycleService } from '../services/indexLifecycleService';
+import { ProposalService } from '../services/proposalService';
+import { ApprovalService } from '../services/approvalService';
+import { ProposalApplyService } from '../services/proposalApplyService';
+import { OrganizeService } from '../services/organizeService';
+import {
+	changeKindLabel,
+	persistenceBanner,
+	proposalActions,
+	proposalStatusLabel,
+	zoneLabel,
+} from './proposalViewState';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
+
+/** Read-only audit query surface injected by the runtime. */
+export interface AuditQueryPort {
+	listRecent(limit: number, context: RequestContext): Promise<AuditRecord[]>;
+}
 
 const NAV_ITEMS = [
 	{ label: '总览', icon: 'layout-dashboard' as const, target: 'agent-dashboard-overview' },
@@ -54,6 +71,7 @@ export class AgentDashboardView extends ItemView {
 	private knowledgeResultsEl: HTMLElement | null = null;
 	private knowledgeStatusEl: HTMLElement | null = null;
 	private knowledgeQuery = '';
+	private knowledgeSearchVersion = 0;
 
 	private liveLabelEl: HTMLSpanElement | null = null;
 	private syncTimeEl: HTMLSpanElement | null = null;
@@ -61,14 +79,49 @@ export class AgentDashboardView extends ItemView {
 	private activeViewLabelEl: HTMLSpanElement | null = null;
 	private feedbackEl: HTMLSpanElement | null = null;
 
+	private readonly dashboard: DashboardService;
+	private readonly actionService: AgentActionService;
+	private readonly searchService: SearchService;
+	private readonly lifecycle: IndexLifecycleService;
+	private readonly proposals: ProposalService;
+	private readonly approvals: ApprovalService;
+	private readonly applyService: ProposalApplyService;
+	private readonly persistence: PersistenceRuntimeStatus;
+	private readonly organize: OrganizeService;
+	private readonly audit: AuditQueryPort;
+
+	private workbenchStatusEl: HTMLElement | null = null;
+	private persistenceBannerEl: HTMLElement | null = null;
+	private workbenchErrorEl: HTMLElement | null = null;
+	private proposalListEl: HTMLElement | null = null;
+	private auditListEl: HTMLElement | null = null;
+	private workbenchToken = 0;
+	private organizeBusy = false;
+
 	constructor(
 		leaf: WorkspaceLeaf,
-		private readonly dashboard: DashboardService,
-		private readonly actionService: AgentActionService,
-		private readonly searchService: SearchService,
-		private readonly lifecycle: IndexLifecycleService,
+		dashboard: DashboardService,
+		actionService: AgentActionService,
+		searchService: SearchService,
+		lifecycle: IndexLifecycleService,
+		proposals: ProposalService,
+		approvals: ApprovalService,
+		applyService: ProposalApplyService,
+		persistence: PersistenceRuntimeStatus,
+		organize: OrganizeService,
+		audit: AuditQueryPort,
 	) {
 		super(leaf);
+		this.dashboard = dashboard;
+		this.actionService = actionService;
+		this.searchService = searchService;
+		this.lifecycle = lifecycle;
+		this.proposals = proposals;
+		this.approvals = approvals;
+		this.applyService = applyService;
+		this.persistence = persistence;
+		this.organize = organize;
+		this.audit = audit;
 	}
 
 	getViewType(): string {
@@ -108,6 +161,13 @@ export class AgentDashboardView extends ItemView {
 		this.feedFilterEmptyEl = null;
 		this.knowledgeResultsEl = null;
 		this.knowledgeStatusEl = null;
+		this.knowledgeSearchVersion += 1;
+		this.workbenchToken += 1;
+		this.workbenchStatusEl = null;
+		this.persistenceBannerEl = null;
+		this.workbenchErrorEl = null;
+		this.proposalListEl = null;
+		this.auditListEl = null;
 		return Promise.resolve();
 	}
 
@@ -175,6 +235,11 @@ export class AgentDashboardView extends ItemView {
 		this.feedListEl = null;
 		this.taskFilterEmptyEl = null;
 		this.feedFilterEmptyEl = null;
+		this.workbenchStatusEl = null;
+		this.persistenceBannerEl = null;
+		this.workbenchErrorEl = null;
+		this.proposalListEl = null;
+		this.auditListEl = null;
 
 		const data = this.data;
 		if (!data) {
@@ -194,6 +259,7 @@ export class AgentDashboardView extends ItemView {
 		this.renderStats(content, data);
 		this.renderHeatmap(content, data);
 		this.renderKnowledgeSearch(content);
+		this.renderWorkbench(content);
 
 		const lowerGrid = content.createDiv({ cls: 'agent-dashboard-lower-grid' });
 		this.renderTasks(lowerGrid, data);
@@ -218,17 +284,21 @@ export class AgentDashboardView extends ItemView {
 	}
 
 	private async loadKnowledgeResults(): Promise<void> {
-		if (!this.knowledgeResultsEl) return;
+		const resultsEl = this.knowledgeResultsEl;
+		if (!resultsEl || this.isClosed) return;
 		const query = this.knowledgeQuery.trim();
+		const version = ++this.knowledgeSearchVersion;
 		if (!query) { this.renderKnowledgeEmpty('输入关键词开始搜索。'); return; }
 		this.renderKnowledgeEmpty('正在搜索…');
 		try {
 			const results = await this.searchService.query({ query, limit: 10, context: createRequestContext('user') });
-			if (!this.knowledgeResultsEl) return;
-			this.knowledgeResultsEl.empty();
+			if (this.isClosed || version !== this.knowledgeSearchVersion || resultsEl !== this.knowledgeResultsEl) return;
+			resultsEl.empty();
 			if (results.length === 0) { this.renderKnowledgeEmpty('没有匹配的笔记。'); return; }
 			results.forEach((result) => this.renderKnowledgeResult(result));
-		} catch (error) { this.renderKnowledgeEmpty(`搜索失败：${this.getErrorMessage(error)}`); }
+		} catch (error) {
+			if (!this.isClosed && version === this.knowledgeSearchVersion && resultsEl === this.knowledgeResultsEl) this.renderKnowledgeEmpty(`搜索失败：${this.getErrorMessage(error)}`);
+		}
 	}
 
 	private renderKnowledgeResult(result: SearchResult): void {
@@ -244,6 +314,308 @@ export class AgentDashboardView extends ItemView {
 	}
 
 	private renderKnowledgeEmpty(message: string): void { this.knowledgeResultsEl?.empty(); this.knowledgeResultsEl?.createDiv({ cls: 'agent-dashboard-empty-state', text: message }); }
+
+	private renderWorkbench(parent: HTMLElement): void {
+		const card = parent.createEl('section', {
+			cls: 'agent-dashboard-surface agent-dashboard-workbench-card',
+			attr: { id: 'agent-dashboard-workbench', 'aria-labelledby': 'agent-dashboard-workbench-title' },
+		});
+		const header = card.createDiv({ cls: 'agent-dashboard-surface-header compact' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '墨忆台 · 核心功能' });
+		heading.createEl('h2', { attr: { id: 'agent-dashboard-workbench-title' }, text: '整理工作台' });
+		this.workbenchStatusEl = heading.createEl('p', { text: this.lifecycleStatusText() });
+
+		const generateButton = header.createEl('button', {
+			cls: 'agent-dashboard-subtle-button',
+			attr: { type: 'button', 'aria-label': '生成整理计划' },
+		});
+		generateButton.createSpan({ text: '生成整理计划' });
+		this.registerDomEvent(generateButton, 'click', () => {
+			void this.handleGeneratePlan(generateButton);
+		});
+
+		this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-banner' });
+		this.renderPersistenceBanner();
+
+		this.workbenchErrorEl = card.createDiv({
+			cls: 'agent-dashboard-workbench-error',
+			attr: { role: 'alert', 'aria-live': 'polite' },
+		});
+		this.workbenchErrorEl.hidden = true;
+
+		const listHeading = card.createDiv({ cls: 'agent-dashboard-workbench-subheading' });
+		listHeading.createEl('h3', { text: '整理方案' });
+		this.proposalListEl = card.createDiv({ cls: 'agent-dashboard-proposal-list' });
+
+		const auditDetails = card.createEl('details', { cls: 'agent-dashboard-audit-details' });
+		auditDetails.createEl('summary', { text: '最近审计记录' });
+		this.auditListEl = auditDetails.createDiv({ cls: 'agent-dashboard-audit-list' });
+
+		void this.refreshWorkbench();
+	}
+
+	private renderPersistenceBanner(): void {
+		const bannerEl = this.persistenceBannerEl;
+		if (!bannerEl) {
+			return;
+		}
+		bannerEl.empty();
+		const state = persistenceBanner(this.persistence);
+		bannerEl.addClass(`is-${state.tone}`);
+		const title = bannerEl.createDiv({ cls: 'agent-dashboard-persistence-title' });
+		title.setText(state.title);
+		if (state.tone === 'danger') {
+			const stores = bannerEl.createDiv({ cls: 'agent-dashboard-persistence-stores' });
+			(['proposals', 'approvals', 'audit'] as const).forEach((key) => {
+				const report = this.persistence.stores[key];
+				const row = stores.createDiv({ cls: 'agent-dashboard-persistence-store' });
+				row.createSpan({ cls: 'agent-dashboard-persistence-store-name', text: key });
+				const parts: string[] = [`跳过 ${report.skipped_rows} 行`];
+				if (report.error) {
+					parts.push(report.error);
+				}
+				row.createSpan({ cls: 'agent-dashboard-persistence-store-detail', text: parts.join(' · ') });
+			});
+		}
+	}
+
+	private async handleGeneratePlan(button: HTMLButtonElement): Promise<void> {
+		if (this.organizeBusy || button.disabled) {
+			return;
+		}
+		this.organizeBusy = true;
+		button.disabled = true;
+		this.setWorkbenchStatus('正在生成整理计划…');
+		this.setWorkbenchError('');
+		try {
+			const context = createRequestContext('user');
+			const plan = await this.organize.plan({ kind: 'global' }, context);
+			const created = await this.proposals.createFromPlan(plan, context);
+			this.setWorkbenchStatus(`已生成 ${created.length} 条整理方案`);
+			await this.refreshWorkbench();
+		} catch (error) {
+			this.setWorkbenchStatus('生成整理计划失败');
+			this.setWorkbenchError(this.getErrorMessage(error));
+		} finally {
+			this.organizeBusy = false;
+			button.disabled = false;
+		}
+	}
+
+	private async refreshWorkbench(): Promise<void> {
+		if (this.isClosed) {
+			return;
+		}
+		const token = ++this.workbenchToken;
+		try {
+			const context = createRequestContext('user');
+			const proposals = await this.proposals.list({}, context);
+			const auditRecords = await this.audit.listRecent(20, context);
+			if (this.isClosed || token !== this.workbenchToken) {
+				return;
+			}
+			this.renderPersistenceBanner();
+			this.renderProposalList(proposals);
+			this.renderAuditList(auditRecords);
+		} catch (error) {
+			if (this.isClosed || token !== this.workbenchToken) {
+				return;
+			}
+			this.setWorkbenchError(this.getErrorMessage(error));
+		}
+	}
+
+	private renderProposalList(proposals: Proposal[]): void {
+		const list = this.proposalListEl;
+		if (!list) {
+			return;
+		}
+		list.empty();
+		const sorted = [...proposals].sort((a, b) =>
+			a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0,
+		);
+		if (sorted.length === 0) {
+			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无整理方案。先开启整理开关并生成计划。' });
+			return;
+		}
+		sorted.forEach((proposal) => this.renderProposalItem(list, proposal));
+	}
+
+	private renderProposalItem(parent: HTMLElement, proposal: Proposal): void {
+		const actions = proposalActions(proposal, this.persistence);
+		const item = parent.createEl('article', {
+			cls: 'agent-dashboard-proposal-item',
+			attr: { 'data-status': proposal.status },
+		});
+		const topline = item.createDiv({ cls: 'agent-dashboard-proposal-topline' });
+
+		const toggle = topline.createEl('button', {
+			cls: 'agent-dashboard-proposal-toggle',
+			attr: { type: 'button', 'aria-expanded': 'false', 'aria-label': `展开预览：${proposal.target_path}` },
+		});
+		const copy = toggle.createDiv({ cls: 'agent-dashboard-proposal-copy' });
+		copy.createEl('strong', { cls: 'agent-dashboard-proposal-path', text: proposal.target_path });
+		copy.createSpan({
+			cls: 'agent-dashboard-proposal-meta',
+			text: `${zoneLabel(proposal.target_zone)} · ${changeKindLabel(proposal.change_kind)} · ${proposal.base_hash.slice(0, 8)}`,
+		});
+		toggle.createSpan({ cls: 'agent-dashboard-status-badge', text: proposalStatusLabel(proposal.status) });
+		const chevron = toggle.createSpan({ cls: 'agent-dashboard-proposal-chevron', attr: { 'aria-hidden': 'true' } });
+		setIcon(chevron, 'chevron-down');
+
+		const actionBar = topline.createDiv({ cls: 'agent-dashboard-proposal-actions' });
+		if (proposal.status === 'pending') {
+			this.renderProposalButton(actionBar, proposal, 'approve', actions.canApprove, actions.disabledReason);
+			this.renderProposalButton(actionBar, proposal, 'reject', actions.canReject, actions.disabledReason);
+		} else if (proposal.status === 'approved') {
+			this.renderProposalButton(actionBar, proposal, 'apply', actions.canApply, actions.disabledReason);
+		}
+		if (actions.disabledReason) {
+			actionBar.createSpan({ cls: 'agent-dashboard-proposal-disabled-reason', text: actions.disabledReason });
+		}
+
+		const preview = item.createDiv({ cls: 'agent-dashboard-proposal-preview' });
+		preview.hidden = true;
+		this.renderPreviewBlock(preview, '修改前', proposal.before);
+		this.renderPreviewBlock(preview, '修改后', proposal.after);
+		this.renderPreviewBlock(preview, '差异', proposal.diff);
+
+		this.registerDomEvent(toggle, 'click', () => {
+			const expanded = preview.hidden;
+			preview.hidden = !expanded;
+			toggle.setAttr('aria-expanded', String(expanded));
+			toggle.classList.toggle('is-expanded', expanded);
+		});
+	}
+
+	private renderProposalButton(
+		parent: HTMLElement,
+		proposal: Proposal,
+		kind: 'approve' | 'reject' | 'apply',
+		enabled: boolean,
+		disabledReason: string | undefined,
+	): void {
+		const labels: Record<'approve' | 'reject' | 'apply', string> = {
+			approve: '批准',
+			reject: '拒绝',
+			apply: '执行写入',
+		};
+		const button = parent.createEl('button', {
+			cls: `agent-dashboard-proposal-button ${kind}`,
+			attr: { type: 'button' },
+		});
+		button.createSpan({ text: labels[kind] });
+		button.disabled = !enabled;
+		if (!enabled && disabledReason) {
+			button.setAttr('title', disabledReason);
+		}
+		this.registerDomEvent(button, 'click', () => {
+			if (kind === 'approve' || kind === 'reject') {
+				void this.handleProposalDecision(proposal, kind, button);
+			} else {
+				void this.handleProposalApply(proposal, button);
+			}
+		});
+	}
+
+	private renderPreviewBlock(parent: HTMLElement, label: string, content: string): void {
+		const block = parent.createDiv({ cls: 'agent-dashboard-proposal-preview-block' });
+		block.createEl('strong', { text: label });
+		block.createEl('pre', { text: content || '（空）' });
+	}
+
+	private async handleProposalDecision(
+		proposal: Proposal,
+		decision: 'approve' | 'reject',
+		button: HTMLButtonElement,
+	): Promise<void> {
+		if (button.disabled) {
+			return;
+		}
+		button.disabled = true;
+		const verb = decision === 'approve' ? '批准' : '拒绝';
+		this.setWorkbenchStatus(`正在${verb} ${proposal.target_path}…`);
+		this.setWorkbenchError('');
+		try {
+			await this.approvals.decide(proposal.proposal_id, decision, createRequestContext('user'));
+			this.setWorkbenchStatus(`已${verb}`);
+			await this.refreshWorkbench();
+		} catch (error) {
+			this.setWorkbenchStatus(`${verb}失败`);
+			this.setWorkbenchError(this.getErrorMessage(error));
+		}
+	}
+
+	private async handleProposalApply(proposal: Proposal, button: HTMLButtonElement): Promise<void> {
+		if (button.disabled) {
+			return;
+		}
+		button.disabled = true;
+		this.setWorkbenchStatus(`正在执行写入 ${proposal.target_path}…`);
+		this.setWorkbenchError('');
+		try {
+			const result = await this.applyService.apply(proposal.proposal_id, createRequestContext('user'));
+			if (result.status === 'applied') {
+				this.setWorkbenchStatus(`写入完成：${proposal.target_path}`);
+			} else {
+				const code = result.error_code ? `（${result.error_code}）` : '';
+				this.setWorkbenchStatus('执行写入未完成');
+				this.setWorkbenchError(`写入未完成：${result.status}${code}`);
+			}
+			await this.refreshWorkbench();
+		} catch (error) {
+			this.setWorkbenchStatus('执行写入失败');
+			this.setWorkbenchError(this.getErrorMessage(error));
+		}
+	}
+
+	private renderAuditList(records: AuditRecord[]): void {
+		const list = this.auditListEl;
+		if (!list) {
+			return;
+		}
+		list.empty();
+		if (records.length === 0) {
+			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无审计记录。' });
+			return;
+		}
+		records.forEach((record) => {
+			const row = list.createDiv({ cls: 'agent-dashboard-audit-row' });
+			row.createSpan({ cls: 'agent-dashboard-audit-id', text: record.request_id });
+			row.createSpan({ cls: 'agent-dashboard-audit-path', text: record.path || '—' });
+			const okResult = record.result === 'success' || record.result === 'applied';
+			row.createSpan({
+				cls: `agent-dashboard-audit-result${okResult ? ' ok' : ' warn'}`,
+				text: record.result,
+			});
+			row.createSpan({ cls: 'agent-dashboard-audit-time', text: this.formatDateTime(record.created_at) });
+		});
+	}
+
+	private setWorkbenchStatus(message: string): void {
+		this.workbenchStatusEl?.setText(message);
+	}
+
+	private setWorkbenchError(message: string): void {
+		const errorEl = this.workbenchErrorEl;
+		if (!errorEl) {
+			return;
+		}
+		errorEl.empty();
+		if (message) {
+			errorEl.createSpan({ text: message });
+		}
+		errorEl.hidden = !message;
+	}
+
+	private formatDateTime(value: string): string {
+		const date = new Date(value);
+		if (Number.isNaN(date.getTime())) {
+			return '--';
+		}
+		return date.toLocaleString('zh-CN', { hour12: false });
+	}
 
 	private lifecycleStatusText(): string {
 		const state = this.lifecycle.getState();

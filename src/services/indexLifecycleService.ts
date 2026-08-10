@@ -20,6 +20,8 @@ export function isMarkdownPath(path: string): boolean {
 export class IndexLifecycleService {
 	private state: IndexLifecycleState = { status: 'failed', count: 0 };
 	private rebuildPromise: Promise<void> | null = null;
+	private generation = 0;
+	private lifecycleQueue: Promise<void> = Promise.resolve();
 	private readonly pathQueues = new Map<string, Promise<void>>();
 	private indexedPaths = new Set<string>();
 
@@ -36,8 +38,9 @@ export class IndexLifecycleService {
 	async rebuild(context: RequestContext = createRequestContext('background-task')): Promise<void> {
 		if (this.rebuildPromise) return this.rebuildPromise;
 		const previous = this.state;
+		const generation = ++this.generation;
 		this.state = { status: 'rebuilding', count: previous.count };
-		this.rebuildPromise = this.runRebuild(context, previous).finally(() => { this.rebuildPromise = null; });
+		this.rebuildPromise = this.enqueueGlobal(() => this.runRebuild(context, previous, generation)).finally(() => { this.rebuildPromise = null; });
 		return this.rebuildPromise;
 	}
 
@@ -62,7 +65,7 @@ export class IndexLifecycleService {
 		}));
 	}
 
-	private async runRebuild(context: RequestContext, previous: IndexLifecycleState): Promise<void> {
+	private async runRebuild(context: RequestContext, previous: IndexLifecycleState, generation: number): Promise<void> {
 		try {
 			const paths = await this.reader.listMarkdownPaths(context);
 			const documents = [];
@@ -70,6 +73,7 @@ export class IndexLifecycleService {
 				if (isMarkdownPath(path)) documents.push(parseVaultDocument(path, await this.reader.readMarkdown(path, context)));
 			}
 			await this.indexBuildAll(documents, context);
+			if (generation !== this.generation) return;
 			this.indexedPaths = new Set(documents.map((document) => document.path));
 			this.state = { status: 'ready', count: this.indexedPaths.size };
 		} catch (error) {
@@ -110,10 +114,16 @@ export class IndexLifecycleService {
 
 	private enqueue(key: string, operation: () => Promise<void>): Promise<void> {
 		const previous = this.pathQueues.get(key) ?? Promise.resolve();
-		const next = previous.catch(() => undefined).then(operation).finally(() => {
+		const next = previous.catch(() => undefined).then(() => this.enqueueGlobal(operation)).finally(() => {
 			if (this.pathQueues.get(key) === next) this.pathQueues.delete(key);
 		});
 		this.pathQueues.set(key, next);
+		return next;
+	}
+
+	private enqueueGlobal(operation: () => Promise<void>): Promise<void> {
+		const next = this.lifecycleQueue.catch(() => undefined).then(operation);
+		this.lifecycleQueue = next.catch(() => undefined);
 		return next;
 	}
 

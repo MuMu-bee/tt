@@ -3,7 +3,7 @@ import type { RequestContext, RequestActor } from './requestContext';
 export type ErrorCode =
   | 'SEARCH_FAILED' | 'INDEX_UNAVAILABLE' | 'SEMANTIC_UNAVAILABLE' | 'EMBEDDING_UNAVAILABLE'
   | 'OUT_OF_WHITELIST' | 'SCOPE_DENIED' | 'FICTION_PROPOSAL_ONLY' | 'FEATURE_DISABLED'
-  | 'HASH_CONFLICT' | 'WRITE_FAILED' | 'INDEX_REFRESH_FAILED' | 'AUDIT_FAILED' | 'VALIDATION_ERROR';
+  | 'HASH_CONFLICT' | 'WRITE_FAILED' | 'INDEX_REFRESH_FAILED' | 'AUDIT_FAILED' | 'VALIDATION_ERROR' | 'PERSISTENCE_DEGRADED';
 
 export interface ApiEnvelope<T> { code: ErrorCode | 'OK'; data: T | null; message: string; request_id?: string }
 
@@ -25,6 +25,30 @@ export interface OrganizePlan { plan_id: string; request_id: string; changes: Pl
 export interface WriteRequest { path: string; content: string; before_hash: string; kind: ChangeKind; scope_snapshot: SearchScope; dry_run?: boolean; zone: VaultZone; request_id: string }
 export interface WriteResult { path: string; status: 'applied' | 'conflict' | 'failed' | 'proposal_only' | 'skipped'; before_hash: string; after_hash?: string; refresh?: RefreshStatus; error_code?: ErrorCode }
 export interface AuditEvent { request_id: string; actor: RequestActor; action: string; path: string; before_hash?: string; after_hash?: string; result: string; created_at: string; error_code?: ErrorCode }
+
+export type ProposalStatus = 'pending' | 'approved' | 'rejected' | 'applied' | 'conflict' | 'failed' | 'expired' | 'pending-compensation';
+export interface Proposal {
+  proposal_id: string;
+  request_id: string;
+  target_path: string;
+  target_zone: VaultZone;
+  change_kind: ChangeKind;
+  base_hash: string;
+  before: string;
+  after: string;
+  diff: string;
+  reason: string;
+  created_at: string;
+  expires_at?: string;
+  status: ProposalStatus;
+  requires_approval: boolean;
+  schema_version: number;
+}
+export interface ProposalFilter { status?: ProposalStatus; target_path?: string; request_id?: string }
+export interface ApprovalRecord { approval_id: string; proposal_id: string; request_id: string; decision: 'approve' | 'reject'; actor: 'user'; decided_at: string; note?: string }
+export interface AuditRecord extends AuditEvent { audit_id: string; proposal_id?: string; content_hash?: string; compensation?: boolean }
+export type AuditWriteStatus = 'success' | 'pending-compensation' | 'failed';
+export interface AuditFilter { request_id?: string; proposal_id?: string; path?: string; result?: string }
 
 export const DEFAULT_SEARCH_CONFIG: SearchConfig = {
   keyword_min_results: 3,

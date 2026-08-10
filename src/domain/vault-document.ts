@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../utils/sha256.ts';
 
 /** Markdown document and its lossless source metadata used by the read-only index. */
 export interface VaultDocument {
@@ -32,7 +32,7 @@ export function parseVaultDocument(path: string, raw: string): VaultDocument {
 
 /** Returns a stable SHA-256 digest of the original UTF-8 source bytes. */
 export function hashRaw(raw: string): string {
-	return createHash('sha256').update(Buffer.from(raw, 'utf8')).digest('hex');
+	return sha256Hex(raw);
 }
 
 export interface FrontmatterResult {

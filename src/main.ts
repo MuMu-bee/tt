@@ -5,10 +5,8 @@ import {
 	AgentDashboardSettings,
 } from './settings';
 import { UnavailableModel } from './adapters/unavailableModel';
-import { ObsidianVaultReader } from './adapters/obsidianVaultReader';
-import { InMemoryVaultIndex } from './adapters/in-memory-vault-index';
-import { SearchService } from './services/searchService';
-import { IndexLifecycleService, isMarkdownPath } from './services/indexLifecycleService';
+import { isMarkdownPath } from './services/indexLifecycleService';
+import { composeRuntime } from './services/runtimeComposition';
 import { createRequestContext } from './application/requestContext';
 import { AgentActionService } from './services/agentActionService';
 import { DashboardService } from './services/dashboardService';
@@ -24,17 +22,28 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.loadSettings();
 
 		const dashboardService = new DashboardService(this.app);
-		const reader = new ObsidianVaultReader(this.app);
-		const index = new InMemoryVaultIndex(reader);
-		const searchService = new SearchService(index);
-		const lifecycle = new IndexLifecycleService(reader, index);
+		const runtime = await composeRuntime(this.app, this.settings);
+		const searchService = runtime.search;
+		const lifecycle = runtime.lifecycle;
 		void lifecycle.rebuild(createRequestContext('background-task')).catch(() => undefined);
 		const model = new UnavailableModel();
 		const actionService = new AgentActionService(this.app, dashboardService, model);
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
-			(leaf) => new AgentDashboardView(leaf, dashboardService, actionService, searchService, lifecycle),
+			(leaf) => new AgentDashboardView(
+				leaf,
+				dashboardService,
+				actionService,
+				searchService,
+				lifecycle,
+				runtime.proposals,
+				runtime.approvals,
+				runtime.apply,
+				runtime.persistence,
+				runtime.organize,
+				runtime.audit,
+			),
 		);
 
 		this.registerEvent(this.app.vault.on('create', (file) => { if (isMarkdownPath(file.path)) void lifecycle.create(file.path).catch(() => undefined); this.refreshDashboardViews(); }));

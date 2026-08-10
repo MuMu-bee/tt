@@ -21,6 +21,7 @@ export class SearchService {
     return response.results.map((result) => ({ ...result, open_path: this.metadataString(result, 'open_path') ?? result.path, ...(this.metadataString(result, 'raw_hash') ? { raw_hash: this.metadataString(result, 'raw_hash') } : {}) }));
   }
   async search(query: SearchQuery, context: RequestContext = createRequestContext('user')): Promise<SearchResponse> {
+    const requestVersion = context.request_id;
     const text = query.text.trim();
     const limit = Number.isFinite(query.limit) ? Math.max(0, Math.floor(query.limit)) : 10;
     if (!text || limit === 0) return { results: [], diagnostics: this.emptyDiagnostics() };
@@ -35,7 +36,7 @@ export class SearchService {
     const semanticEnabled = this.config.semantic_search_enabled && (query.mode !== 'keyword' || this.config.semantic_fallback_enabled || query.force_semantic === true);
     if (!shouldSemantic || !semanticEnabled || !this.semantic) return { results: keywordResults, diagnostics: { ...this.emptyDiagnostics(), keyword_count: keywordResults.length, semantic_called: false } };
     try {
-      const semanticResults = (await this.semantic.search(query, context.child ? context.child() : createRequestContext(context.actor, context.request_id))).slice(0, limit).map((result) => ({ ...result, source: 'semantic' as const }));
+      const semanticResults = (await this.semantic.search(query, context.child ? context.child() : createRequestContext(context.actor, requestVersion))).slice(0, limit).map((result) => ({ ...result, source: 'semantic' as const }));
       const results = query.mode === 'semantic' ? semanticResults : this.hybrid(keywordResults, semanticResults, limit);
       return { results, diagnostics: { keyword_count: keywordResults.length, semantic_count: semanticResults.length, semantic_called: true, degraded: false, semantic_unavailable: false } };
     } catch (error) {
