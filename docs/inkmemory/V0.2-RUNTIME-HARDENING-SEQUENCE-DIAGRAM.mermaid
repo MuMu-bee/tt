@@ -1,0 +1,76 @@
+sequenceDiagram
+  participant Obsidian as Obsidian Runtime
+  participant Root as main.ts / RuntimeComposition
+  participant Flags as settings + FeatureFlags
+  participant View as AgentDashboardView
+  participant Search as SearchService
+  participant Index as IndexLifecycleService
+  participant Keyword as IndexPort
+  participant Semantic as SemanticSearchPort
+  participant Org as OrganizeService
+  participant Write as WriteService
+  participant WP as ObsidianWritePort
+  participant Audit as AuditSink
+  Obsidian->>Root: onload()
+  Root->>Flags: loadSettings()
+  Root->>Root: map flags -> SearchConfig
+  Root->>Semantic: construct optional adapter or UnavailableSemanticSearch
+  Root->>WP: construct ObsidianWritePort(app)
+  Root->>Index: construct lifecycle coordinator
+  Root->>Search: construct(index, semantic, config)
+  Root->>Org: construct(scanner, flags)
+  Root->>Write: construct(writePort, audit, lifecycle, flags)
+  Root->>Index: rebuild(ctx{request_id, actor=background-task})
+  Index->>Index: snapshot generation and read Markdown list
+  Index->>Keyword: buildAll(parsed documents, ctx.child())
+  alt build success and generation current
+    Keyword-->>Index: ready index
+    Index-->>View: state=ready/count
+  else rebuild failure or stale generation
+    Index-->>View: state=failed or retry; old index retained
+  end
+  View->>View: input query; searchVersion += 1; capture token
+  View->>Search: query({text, mode, limit}, ctx{request_id})
+  Search->>Keyword: search(text, options, ctx)
+  Keyword-->>Search: keyword hits
+  alt keyword sufficient or semantic flag disabled
+    Search-->>View: keyword results + diagnostics
+  else semantic enabled and fallback needed
+    Search->>Semantic: health/search(query, ctx.child())
+    alt semantic available
+      Semantic-->>Search: semantic hits
+      Search-->>View: keyword-first hybrid results
+    else semantic unavailable/error
+      Semantic-->>Search: unavailable/error
+      Search-->>View: keyword results + degraded reason
+    end
+  end
+  View->>View: apply result only if token==searchVersion && !isClosed
+  Obsidian->>Root: create/modify/delete/rename(path)
+  Root->>Index: enqueue event with new generation and ctx
+  Index->>Keyword: upsert/invalidate(event, ctx)
+  Index-->>View: state/count refresh
+  View->>Org: plan(scope, ctx)
+  Org->>Org: scan notes and create actual before/after/diff
+  Org-->>View: OrganizePlan (no-op omitted; fiction proposal-only)
+  View->>Write: write(request, ctx) [only when flag/approval permits]
+  Write->>WP: read(path, ctx.child())
+  WP-->>Write: current Markdown
+  alt disabled/scope/zone/whitelist/hash conflict
+    Write-->>View: skipped/proposal_only/conflict; WP.writeAtomic never called
+  else valid apply
+    Write->>WP: writeAtomic(path, after, ctx.child())
+    WP-->>Write: success
+    Write->>WP: read(path, ctx.child())
+    WP-->>Write: after Markdown/hash
+    Write->>Index: modify(path, ctx.child())
+    alt refresh success
+      Index-->>Write: ready
+    else refresh failure
+      Index-->>Write: failed/pending
+    end
+    Write->>Audit: append(event with before/after hash, ctx.child())
+    Write-->>View: applied or failed-index-refresh result
+  end
+  View->>View: onClose(); isClosed=true; lifecycleToken++
+  Semantic-->>View: late response discarded by token/closed guard

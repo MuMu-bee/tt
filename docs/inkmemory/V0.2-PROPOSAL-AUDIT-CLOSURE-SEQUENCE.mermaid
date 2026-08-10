@@ -1,0 +1,86 @@
+sequenceDiagram
+  autonumber
+  participant Main as main.ts
+  participant UI as AgentDashboardView
+  participant O as OrganizeService
+  participant P as ProposalService
+  participant PS as ProposalStore
+  participant AS as AuditStore
+  participant W as WriteService
+  participant WP as WritePort/ObsidianWritePort
+  participant I as IndexLifecycleService
+
+  Main->>P: recover(ctx)
+  P->>PS: recover(ctx)
+  PS-->>P: valid records + corrupt skipped + compensation queue
+  P->>AS: recover(ctx)
+  AS-->>P: audit records/recovery report
+  P-->>Main: restoring complete (no business Markdown writes)
+
+  UI->>O: plan(scope, ctx)
+  O-->>UI: OrganizePlan(changes)
+  UI->>P: createFromPlan(plan, ctx)
+  loop each PlannedChange
+    P->>PS: save ProposalRecord(pending_approval/proposal_only)
+    PS-->>P: committed or pending-compensation
+  end
+  P-->>UI: proposal list
+
+  UI->>P: approve(proposalId, note, ctx)
+  P->>PS: get(proposalId)
+  PS-->>P: pending_approval
+  P->>PS: compareAndSet(pending_approval -> approved)
+  P->>PS: saveApproval(ApprovalRecord approve)
+  P->>AS: append approval audit
+  P-->>UI: approved
+
+  UI->>P: reject(proposalId, note, ctx)
+  P->>PS: CAS pending_approval -> rejected
+  P->>PS: saveApproval(ApprovalRecord reject)
+  P->>AS: append rejection audit
+  P-->>UI: rejected
+
+  UI->>P: apply(proposalId, ctx)
+  P->>PS: get(proposalId)
+  PS-->>P: approved proposal
+  P->>PS: CAS approved -> applying
+  alt fiction/unknown or invalid path/kind
+    P->>PS: set blocked
+    P->>AS: append blocked audit
+    P-->>UI: blocked, zero writes
+  else approved normal proposal
+    P->>W: write(path, content, before_hash, kind, zone, ctx)
+    W->>WP: read(path, child ctx)
+    WP-->>W: current Markdown
+    W->>W: compute current hash and compare base_hash
+    alt hash conflict
+      W-->>P: conflict (writeAtomic not called)
+      P->>PS: set conflict
+      P->>AS: append conflict audit
+      P-->>UI: conflict
+    else hash matches
+      W->>WP: writeAtomic(path, after_content, child ctx)
+      WP-->>W: write complete
+      W->>WP: read(path, child ctx)
+      WP-->>W: after Markdown
+      W->>I: modify(path, child ctx)
+      alt index refresh fails
+        I-->>W: failed
+        W-->>P: applied_index_pending
+        P->>PS: set applied_index_pending
+        P->>AS: append index-pending audit
+      else index refresh succeeds
+        I-->>W: succeeded
+        W-->>P: applied
+        P->>AS: append success audit
+        P->>PS: set applied
+      end
+      P-->>UI: final status
+    end
+  end
+
+  UI->>P: apply(proposalId, ctx) again
+  P->>PS: get(proposalId)
+  PS-->>P: terminal applied/conflict/failed
+  P->>AS: append duplicate/invalid-state audit
+  P-->>UI: DUPLICATE_APPLY, WritePort not called

@@ -1,131 +1,152 @@
 classDiagram
   class RequestContext {
     +string request_id
-    +string task_id
-    +string parent_request_id
-    +RequestSource source
+    +RequestActor actor
     +string created_at
-    +AbortSignal signal
-    +Record~string,string~ metadata
+    +child() RequestContext
   }
-  class VaultFile {
-    +string path
-    +string basename
-    +string extension
-    +number ctime
-    +number mtime
-    +Record~string,unknown~ frontmatter
-    +string[] tags
-    +Record~string,number~ linksOut
+  class PersistenceRecoveryReport {
+    +PersistenceStatus status
+    +StoreRecoveryResult proposals
+    +StoreRecoveryResult approvals
+    +StoreRecoveryResult audit
+    +string[] warnings
+    +string error
   }
-  class VaultPort {
+  class StoreRecoveryResult {
+    +number loaded
+    +number skipped
+    +number duplicates
+    +number pending_compensation
+  }
+  class PersistenceGate {
+    -PersistenceStatus status
+    +getStatus() PersistenceStatus
+    +assertReady(operation) void
+    +markDegraded(reason) void
+    +markReady(report) void
+  }
+  class PersistenceRuntime {
+    +ProposalStore proposals
+    +ApprovalStore approvals
+    +AuditStore audits
+    +PersistenceGate gate
+    +restore(ctx) Promise~PersistenceRecoveryReport~
+    +getStatus() PersistenceStatus
+    +getReport() PersistenceRecoveryReport
+  }
+  class JsonlTextStorage {
     <<interface>>
-    +listMarkdownFiles(ctx) Promise~VaultFile[]~
-    +read(path,ctx) Promise~string~
-    +exists(path,ctx) Promise~boolean~
-    +ensureFolder(path,ctx) Promise~void~
-    +write(path,content,ctx) Promise~void~
+    +read(ctx) Promise~string~
+    +write(value, ctx) Promise~void~
   }
-  class IndexHit {
-    +string path
-    +string title
-    +string snippet
-    +number score
-  }
-  class IndexPort {
-    <<interface>>
-    +search(query,options,ctx) Promise~IndexHit[]~
-    +invalidate(path,ctx) Promise~void~
-    +availability() Availability
-  }
-  class ModelRequest {
-    +string model
-    +Message[] messages
-    +boolean stream
-  }
-  class ModelPort {
-    <<interface>>
-    +complete(input,ctx,onDelta) Promise~ModelResult~
-    +availability() Availability
-  }
-  class NetworkRequest {
-    +string url
-    +string method
-    +Record~string,string~ headers
-    +string body
-  }
-  class NetworkResponse {
-    +number status
-    +Record~string,string~ headers
-    +string body
-  }
-  class NetworkPort {
-    <<interface>>
-    +request(input,ctx) Promise~NetworkResponse~
-    +availability() Availability
-  }
-  class PublishRequest {
-    +string path
-    +string content
-    +PublishKind kind
-    +boolean overwrite
-  }
-  class PublishedArtifact {
-    +string path
-    +string request_id
-  }
-  class MemoryPublishPort {
-    <<interface>>
-    +publish(input,ctx) Promise~PublishedArtifact~
-  }
-  class DashboardService {
-    -VaultScanner scanner
-    -FeedService feeds
-    +load(force,ctx) Promise~DashboardLoadResult~
-    +scanVault(ctx) Promise~DashboardLoadResult~
-  }
-  class VaultScanner {
-    -VaultPort vault
-    +scan(today,ctx) Promise~DashboardLoadResult~
-  }
-  class FeedService {
-    -NetworkPort network
-    -CacheStore cache
-    +loadAll(force,ctx) Promise~FeedBundle~
-  }
-  class AgentActionService {
-    -DashboardService dashboard
-    -MemoryPublishPort publisher
-    -ModelPort model
-    +createDiary(ctx) Promise~PublishedArtifact~
-    +ingestInbox(content,ctx) Promise~PublishedArtifact~
-    +runVaultLint(ctx) Promise~PublishedArtifact~
-    +runDeepResearch(ctx) Promise~ActionResult~
-  }
-  class ObsidianVaultAdapter {
-    <<adapter>>
+  class ObsidianVaultJsonlStorage {
     -App app
+    -string path
+    +read(ctx) Promise~string~
+    +write(value, ctx) Promise~void~
   }
-  class ObsidianNetworkAdapter {
-    <<adapter>>
+  class RestorableStore {
+    <<interface>>
+    +restore(ctx) Promise~StoreRecoveryResult~
   }
-  class UnavailableModelAdapter {
-    <<adapter>>
+  class JsonlProposalStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +save(proposal, ctx) Promise~void~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+    +updateStatus(id, status, ctx) Promise~void~
   }
-  DashboardService --> VaultScanner
-  DashboardService --> FeedService
-  VaultScanner --> VaultPort
-  FeedService --> NetworkPort
-  FeedService --> CacheStore
-  AgentActionService --> DashboardService
-  AgentActionService --> MemoryPublishPort
-  AgentActionService --> ModelPort
-  ObsidianVaultAdapter ..|> VaultPort
-  ObsidianNetworkAdapter ..|> NetworkPort
-  UnavailableModelAdapter ..|> ModelPort
-  MemoryPublishPort --> PublishRequest
-  MemoryPublishPort --> PublishedArtifact
-  VaultPort --> RequestContext
-  IndexPort --> RequestContext
-  ModelPort --> RequestContext
-  NetworkPort --> RequestContext
+  class JsonlApprovalStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +save(record, ctx) Promise~void~
+    +getForProposal(id, ctx) Promise~ApprovalRecord~
+  }
+  class JsonlAuditStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +append(record, ctx) Promise~AuditWriteStatus~
+    +query(filter, ctx) Promise~AuditRecord[]~
+    +listPendingCompensation(ctx) Promise~AuditRecord[]~
+    +retry(id, ctx) Promise~AuditWriteStatus~
+  }
+  class JsonlAuditSink {
+    -JsonlAuditStore store
+    +append(event, ctx) Promise~void~
+    +query(filter, ctx) Promise~AuditEvent[]~
+  }
+  class WriteService {
+    -WritePort port
+    -AuditSink audit
+    -PersistenceGate gate
+    +write(request, ctx) Promise~WriteResult~
+  }
+  class ProposalApplyService {
+    -ProposalStore proposals
+    -ApprovalStore approvals
+    -WriteService writes
+    -PersistenceGate gate
+    +apply(proposalId, ctx) Promise~ProposalApplyResult~
+  }
+  class ProposalService {
+    -ProposalStore store
+    +createFromPlan(plan, ctx) Promise~Proposal[]~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+  }
+  class ApprovalService {
+    -ProposalStore proposals
+    -ApprovalStore approvals
+    +decide(id, decision, ctx, note) Promise~ApprovalResult~
+  }
+  class ProposalStore {
+    <<interface>>
+    +save(proposal, ctx) Promise~void~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+    +updateStatus(id, status, ctx) Promise~void~
+  }
+  class ApprovalStore {
+    <<interface>>
+    +save(record, ctx) Promise~void~
+    +getForProposal(id, ctx) Promise~ApprovalRecord~
+  }
+  class AuditStore {
+    <<interface>>
+    +append(record, ctx) Promise~AuditWriteStatus~
+    +query(filter, ctx) Promise~AuditRecord[]~
+    +listPendingCompensation(ctx) Promise~AuditRecord[]~
+    +retry(id, ctx) Promise~AuditWriteStatus~
+  }
+  class ObsidianWritePort {
+    +read(path, ctx) Promise~string~
+    +writeAtomic(path, content, ctx) Promise~void~
+  }
+
+  PersistenceRuntime *-- PersistenceGate
+  PersistenceRuntime *-- JsonlProposalStore
+  PersistenceRuntime *-- JsonlApprovalStore
+  PersistenceRuntime *-- JsonlAuditStore
+  ObsidianVaultJsonlStorage ..|> JsonlTextStorage
+  JsonlProposalStore ..|> ProposalStore
+  JsonlProposalStore ..|> RestorableStore
+  JsonlApprovalStore ..|> ApprovalStore
+  JsonlApprovalStore ..|> RestorableStore
+  JsonlAuditStore ..|> AuditStore
+  JsonlAuditStore ..|> RestorableStore
+  JsonlProposalStore --> JsonlTextStorage
+  JsonlApprovalStore --> JsonlTextStorage
+  JsonlAuditStore --> JsonlTextStorage
+  JsonlAuditSink --> JsonlAuditStore
+  ProposalService --> ProposalStore
+  ApprovalService --> ProposalStore
+  ApprovalService --> ApprovalStore
+  ProposalApplyService --> ProposalStore
+  ProposalApplyService --> ApprovalStore
+  ProposalApplyService --> PersistenceGate
+  ProposalApplyService --> WriteService
+  WriteService --> PersistenceGate
+  WriteService --> ObsidianWritePort
+  WriteService --> JsonlAuditSink

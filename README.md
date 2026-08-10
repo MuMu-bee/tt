@@ -1,92 +1,186 @@
-# Obsidian Sample Plugin
+# 墨忆台 Memory Workbench
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+Obsidian 插件，为知识库提供只读索引、关键词优先搜索、整理计划 Proposal/Approval/Audit 安全写入闭环和持久化恢复能力。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+## 当前版本
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+- **版本号**：0.1.0
+- **桌面专用**：`isDesktopOnly: true`（暂不支持移动端）
+- **内部包名**：`agent-dashboard`（历史遗留，产品已更名为墨忆台）
+- **分支**：`feat/memory-workbench-foundation`
+- **基线提交**：`5586f4a feat: add v0.2 hybrid search and safe writes`
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+## 核心能力
 
-## First time developing plugins?
+### 只读索引与搜索
 
-Quick starting guide for new plugin devs:
+- 基于 Vault Markdown 构建内存索引
+- 关键词优先搜索（标题、路径、frontmatter、标签、正文）
+- 可选 semantic fallback（默认关闭）
+- 搜索结果返回原文路径和片段
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+### 整理计划与安全写入
 
-## Releasing new releases
+- 四类整理规则：`frontmatter-add`、`tag-add`、`bidirectional-link-add`、`format-normalize`
+- 所有整理规则默认关闭，需用户在设置中开启
+- 整理计划生成真实 before/after/diff，不含虚假变更
+- Proposal 持久化到 Vault 内 JSONL 文件
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
+### Proposal / Approval / Audit 闭环
 
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
-}
+```
+OrganizePlan
+  -> ProposalStore (JSONL 持久化)
+  -> 单条 approve / reject
+  -> apply 前重读文件并校验 base_hash
+  -> fiction / unknown 零写入拦截
+  -> WriteService
+  -> WritePort / Obsidian adapter
+  -> 索引刷新
+  -> AuditStore (JSONL 持久化)
 ```
 
-If you have multiple URLs, you can also do:
+### 持久化恢复
 
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
+- 插件启动时 `await` 恢复 Proposal、Approval、Audit
+- 损坏 JSONL 行跳过，不阻断其他记录恢复
+- 恢复失败进入 degraded 状态
+- degraded 状态阻断审批和写入，但 Dashboard 和搜索仍可用
+- 重启恢复不会自动 apply
+- 当前为**单端持久化**（Vault 内 JSONL），非双端
+
+## 安全边界
+
+| 项目 | 状态 |
+|------|------|
+| Vault Markdown 唯一事实源 | 是 |
+| 所有普通 Markdown 写入经过 WriteService -> WritePort | 是 |
+| UI 和业务服务不直接调用 vault.modify/create/delete/rename | 是 |
+| fiction / unknown proposal-only | 是 |
+| hash conflict 零写入 | 是 |
+| 恢复失败降级并阻断写入 | 是 |
+| 默认写入开关关闭 | 是 |
+| Hermes CLI | 未接入 |
+| child_process / spawn / terminal | 未接入 |
+
+### Feature Flags 默认值
+
+| Flag | 默认值 |
+|------|--------|
+| `semantic_search` | `false` |
+| `semantic_fallback` | `false` |
+| `new_write_pipeline` | `false` |
+| `organize_auto_apply` | `false` |
+| `organize.frontmatter` | `false` |
+| `organize.tags` | `false` |
+| `organize.links` | `false` |
+| `organize.format` | `false` |
+| `fiction_proposal_only` | `true` |
+
+### 持久化文件路径
+
+| 类型 | 路径 | 格式 |
+|------|------|------|
+| Proposal | `_workbench/proposals/records.jsonl` | JSONL |
+| Approval | `_workbench/approvals/records.jsonl` | JSONL |
+| Audit | `_workbench/audit/events.jsonl` | JSONL |
+
+这些文件为 `.jsonl` 格式，不会被插件的 Markdown 索引和搜索收录。
+
+## 安装与构建
+
+### 开发环境
+
+```bash
+npm install
+npm run dev    # 监听模式编译
 ```
 
-## API Documentation
+### 生产构建
 
-See https://docs.obsidian.md
+```bash
+npm run build  # tsc 类型检查 + esbuild 打包
+```
+
+构建产物：
+- `main.js` — 插件主入口
+- `manifest.json` — 插件清单
+- `styles.css` — 样式文件
+
+### 手动安装
+
+将 `main.js`、`manifest.json`、`styles.css` 复制到 Vault 的 `.obsidian/plugins/agent-dashboard/` 目录，然后在 Obsidian 设置中启用插件。
+
+### 测试
+
+```bash
+npm test       # 全量测试（含持久化集成测试）
+npm run lint   # ESLint 检查
+```
+
+## 技术栈
+
+- TypeScript + esbuild
+- Obsidian Plugin API (minAppVersion: 1.8.0)
+- 纯前端，无后端依赖
+- Node.js 20+（开发环境）
+
+## 项目结构
+
+```
+src/
+  main.ts                          # 插件入口
+  settings.ts                      # 设置面板
+  application/
+    contracts.ts                   # 数据结构和接口定义
+    featureFlags.ts                # Feature flags
+    persistenceContracts.ts        # 持久化状态契约
+    requestContext.ts              # 请求上下文
+  domain/
+    vault-document.ts              # Vault 文档解析
+  services/
+    runtimeComposition.ts          # Runtime composition root
+    searchService.ts               # 搜索服务
+    indexLifecycleService.ts       # 索引生命周期
+    organizeService.ts             # 整理计划生成
+    writeService.ts                # 受控写入服务
+    proposalService.ts             # Proposal 服务
+    approvalService.ts             # 审批服务
+    proposalApplyService.ts        # Apply 服务（含 hash 校验）
+    persistenceGate.ts             # 持久化状态门控
+    auditService.ts                # 审计服务
+    scopeService.ts                # 范围控制
+  adapters/
+    obsidianVaultReader.ts         # 只读 Vault 适配器
+    obsidianWritePort.ts           # Obsidian 写入适配器
+    obsidianJsonlStorage.ts        # Vault JSONL 存储
+    jsonlProposalStore.ts          # Proposal JSONL 持久化
+    jsonlApprovalStore.ts          # Approval JSONL 持久化
+    jsonlAuditStore.ts             # Audit JSONL 持久化
+    jsonlAuditSink.ts              # AuditSink 适配
+    in-memory-vault-index.ts       # 内存索引
+    unavailableSemanticSearch.ts   # 语义搜索降级
+  ports/
+    proposalPort.ts                # Proposal 抽象边界
+    approvalPort.ts                # Approval 抽象边界
+    auditStore.ts                  # Audit 抽象边界
+    writePort.ts                   # 写入抽象边界
+    persistencePort.ts             # 持久化恢复抽象
+  views/
+    AgentDashboardView.ts          # Dashboard 视图
+  utils/
+    sha256.ts                      # 跨平台 SHA-256
+tests/
+  *.test.ts                        # 全量测试
+```
+
+## 已知限制
+
+- `pending-compensation` 目前仅为状态标识，不是完整的补偿队列
+- 持久化为单端（Vault 内 JSONL），非双端
+- 桌面 smoke test 尚未在真实 Obsidian 环境中运行
+- 移动端不支持
+
+## 许可证
+
+MIT
