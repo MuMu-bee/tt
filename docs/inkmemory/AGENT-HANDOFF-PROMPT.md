@@ -12,8 +12,7 @@
 - **本地项目目录**：`E:/TT/workbuddy工作/2026-08-08-12-17-00`
 - **当前分支**：`feat/memory-workbench-foundation`
 - **PR**：https://github.com/MuMu-bee/tt/pull/1 （状态 OPEN，目标分支 `main`，尚未合并）
-- **基线提交**：`5586f4a`（v0.2 hybrid search and safe writes）
-- **本地已推送**：`8615cda`（持久化 runtime + 工作台 UI）、`31db295`（文档）已推送到功能分支
+- **基线提交**：`4f361e9`（feat: knowledge graph, daily hot, page redesign, and Obsidian CSS variable migration）
 - **用户画像**：项目所有者是编程小白，所有交付要面向可操作结果，不要让他自己排查代码
 
 ## 二、这个项目是什么
@@ -28,8 +27,11 @@
   - 所有写入经 `WriteService → WritePort → ObsidianWritePort`，UI 不直接碰 `vault.modify/create`
   - 审计记录（Audit）持久化到 `_workbench/audit/events.jsonl`
 - **安全默认**：所有整理/写入开关默认关闭；fiction / unknown 区域的方案即使批准也绝不写入（proposal-only）
+- **知识星图**：Canvas 力导向图展示笔记关联，支持图谱透镜筛选
+- **每日热点**：聚合公开热点，卡片式排名展示
+- **8 页面导航**：总览 / 知识库 / 知识星图 / 任务与计划 / 项目追踪 / 每日热点 / 对话 / 设置
 
-## 三、当前真实状态（截至 2026-08-10）
+## 三、当前真实状态（截至 2026-08-12）
 
 ### 已完成并验证
 - 持久化 Proposal/Approval/Audit adapter 已接入生产 runtime（`runtimeComposition.ts` 使用 `JsonlProposalStore` / `JsonlApprovalStore` / `JsonlAuditStore` / `JsonlAuditSink`，不再使用内存 store）
@@ -37,17 +39,23 @@
 - 恢复失败进入 degraded：`PersistenceGate.isWritable()` 为 false 时，`WriteService` 返回 `PERSISTENCE_DEGRADED`，`ProposalApplyService.apply` 同样被阻断
 - 坏 JSONL 行跳过并计数（skipped_rows），空文件/目录不存在安全处理
 - 工作台新增「整理工作台」区块：持久化状态横幅、生成整理计划、Proposal 列表（批准/拒绝/执行写入）、审计记录折叠区；按钮逻辑抽成纯函数 `src/views/proposalViewState.ts`
-- 全量测试 **53/53 PASS**（`npm test`），build / tsc / lint（0 errors）/ git diff --check 全部通过
-- 已部署到本地 Obsidian vault：`C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/`（main.js 需手动重新构建后复制）
+- **知识星图**：Canvas 力导向图，节点按颜色分类（Wiki/Raw/灵感/内容），图谱透镜筛选，底部统计
+- **每日热点**：6 条热点卡片，排名 + 分类标签 + 热度数据
+- **页面切换**：8 页面导航（总览/知识库/知识星图/任务与计划/项目追踪/每日热点/对话/设置），`showPage()` 机制
+- **CSS 重写**：使用 Obsidian 原生 CSS 变量替代自定义 `--agent-*` 变量，自动跟随主题
+- **全量测试 92/92 PASS**（`npm test`），build / tsc / lint（0 errors）/ git diff --check 全部通过
+- 已部署到本地 Obsidian vault（junction 链接：`C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/` → `deploy/`）
+- 已推送到 GitHub：`4f361e9` 在 `feat/memory-workbench-foundation` 分支
 
 ### 尚未完成 / 已知缺口
 1. **真实桌面 smoke test 未跑**：35 项人工验证清单见 `docs/inkmemory/DESKTOP-SMOKE-TEST-CHECKLIST.md`，需在真实 Obsidian 中逐项验证
 2. **PR #1 未合并**：必须等用户明确指示
-3. **用户反馈"大部分功能不行"的修复刚完成**（补齐了 UI 入口），但用户尚未在真实 Obsidian 中确认新 UI 可用——接手后第一优先级是让用户在真实环境验证
-4. lint 有 10 个既有 warning（requestContext/chatService/vaultContext/settings，均为既有代码，非本轮引入）
-5. 防御性缺口：`_workbench/` 未加入 `src/services/vaultContext.ts` 的 `isExcluded` 列表（JSONL 非 .md 不会被索引，风险低，可后续补）
-6. 单端持久化（仅 Vault 内 JSONL），非双端；`pending-compensation` 仅为状态标识，非真实补偿队列
-7. semantic/Hermes 未接入（`UnavailableSemanticSearch` 安全降级）
+3. **知识星图数据为模拟数据**：当前使用随机生成节点和边，未接入真实 Vault 笔记的 `[[wikilinks]]` 数据（索引中尚无 link 提取）
+4. **每日热点数据为模拟数据**：当前使用硬编码热点，未接入真实公开 API
+5. **lint 有 18 个既有 warning**（既有代码，非本轮引入）
+6. **单端持久化**（仅 Vault 内 JSONL），非双端；`pending-compensation` 仅为状态标识，非真实补偿队列
+7. **V0.4 未开始**：后台研究、Hermes 记忆发布尚未实现
+8. **V0.5 未开始**：定时巡检、主动编排尚未实现
 
 ## 四、技术栈与架构
 
