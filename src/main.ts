@@ -1,15 +1,19 @@
-import { MarkdownView, Plugin } from 'obsidian';
+import { MarkdownView, Plugin, TFile } from 'obsidian';
 import {
 	AgentDashboardSettingTab,
 	DEFAULT_SETTINGS,
 	AgentDashboardSettings,
 } from './settings';
-import { UnavailableModel } from './adapters/unavailableModel';
+import { OpenAiModel } from './adapters/openAiModel';
 import { isMarkdownPath } from './services/indexLifecycleService';
 import { composeRuntime } from './services/runtimeComposition';
 import { createRequestContext } from './application/requestContext';
 import { AgentActionService } from './services/agentActionService';
 import { DashboardService } from './services/dashboardService';
+import { ProjectTracker } from './services/projectTracker';
+import { ProjectReportService } from './services/projectReportService';
+import { VisionService } from './services/visionService';
+import { CacheStore } from './services/cacheStore';
 import {
 	AgentDashboardView,
 	VIEW_TYPE_AGENT_DASHBOARD,
@@ -17,6 +21,7 @@ import {
 
 export default class AgentDashboardPlugin extends Plugin {
 	settings!: AgentDashboardSettings;
+	private projectTracker!: ProjectTracker;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -26,8 +31,15 @@ export default class AgentDashboardPlugin extends Plugin {
 		const searchService = runtime.search;
 		const lifecycle = runtime.lifecycle;
 		void lifecycle.rebuild(createRequestContext('background-task')).catch(() => undefined);
-		const model = new UnavailableModel();
+		const model = new OpenAiModel(this.settings.agent);
 		const actionService = new AgentActionService(this.app, dashboardService, model);
+		this.projectTracker = new ProjectTracker(
+			new CacheStore(this.app.vault),
+			this.settings.projectTracker.githubToken,
+			this.settings.projectTracker.repos,
+		);
+		const projectReport = new ProjectReportService(model);
+		const visionService = new VisionService(this.app, model);
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
@@ -43,8 +55,13 @@ export default class AgentDashboardPlugin extends Plugin {
 				runtime.persistence,
 				runtime.organize,
 				runtime.audit,
+				this.projectTracker,
+				projectReport,
+				visionService,
 			),
 		);
+
+		this.setupAutoProjectReport(this.projectTracker, projectReport);
 
 		this.registerEvent(this.app.vault.on('create', (file) => { if (isMarkdownPath(file.path)) void lifecycle.create(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
 		this.registerEvent(this.app.vault.on('modify', (file) => { if (isMarkdownPath(file.path)) void lifecycle.modify(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
@@ -102,6 +119,63 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.addSettingTab(new AgentDashboardSettingTab(this.app, this));
 	}
 
+	/**
+	 * Generates the daily project report once per day at/after 08:00 when the
+	 * auto-report setting is enabled and no report for today exists yet.
+	 */
+	private setupAutoProjectReport(
+		projectTracker: ProjectTracker,
+		projectReport: ProjectReportService,
+	): void {
+		const dateKey = (date: Date): string =>
+			`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+
+		const todayReportName = (): string => `项目动态-${dateKey(new Date())}.md`;
+
+		const shouldRun = async (): Promise<boolean> => {
+			const settings = this.settings;
+			if (!settings.projectTracker.autoReport) {
+				return false;
+			}
+			const now = new Date();
+			if (now.getHours() < 8) {
+				return false;
+			}
+			const file = this.app.vault.getAbstractFileByPath(`Reports/${todayReportName()}`);
+			return !(file instanceof TFile);
+		};
+
+		const runIfDue = (): void => {
+			void shouldRun().then((due) => {
+				if (!due) {
+					return;
+				}
+				const repos = this.settings.projectTracker.repos;
+				void Promise.all(repos.map((repo) => projectTracker.refresh(repo, true)))
+					.then(async (snapshots) => {
+						const parts: string[] = [];
+						for (const snapshot of snapshots) {
+							const result = await projectReport.generateReport(snapshot, createRequestContext('background-task'));
+							if (result.report) {
+								parts.push(`# ${snapshot.fullName}\n\n${result.report}`);
+							} else if (result.error) {
+								parts.push(`# ${snapshot.fullName}\n\n> ${result.error}`);
+							}
+						}
+						if (parts.length > 0) {
+							await this.app.vault.adapter.mkdir('Reports');
+							await this.app.vault.create(`Reports/${todayReportName()}`, parts.join('\n\n---\n\n') + '\n');
+						}
+					})
+					.catch(() => undefined);
+			});
+		};
+
+		this.registerInterval(window.setInterval(runIfDue, 60_000));
+		// Also run shortly after startup if it is already due today.
+		window.setTimeout(runIfDue, 30_000);
+	}
+
 	async activateDashboardView(): Promise<void> {
 		const { workspace } = this.app;
 		const existingLeaf = workspace.getLeavesOfType(VIEW_TYPE_AGENT_DASHBOARD)[0];
@@ -132,6 +206,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
+		this.projectTracker?.setRepos(this.settings.projectTracker.repos);
 	}
 
 	private refreshDashboardViews(forceFeeds = false): void {

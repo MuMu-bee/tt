@@ -1,19 +1,24 @@
-import { ItemView, Notice, setIcon, TFile } from 'obsidian';
+import { ItemView, Notice, normalizePath, setIcon, TFile } from 'obsidian';
 import type { WorkspaceLeaf } from 'obsidian';
 import type {
 	DashboardAction,
 	DashboardData,
 	DashboardTask,
+	RepoSnapshot,
 	TaskStatus,
 } from '../data/dashboardTypes';
 import { DASHBOARD_ACTIONS } from '../data/dashboardTypes';
 import { AgentActionService, showActionError } from '../services/agentActionService';
 import { DashboardService } from '../services/dashboardService';
+import { ProjectTracker } from '../services/projectTracker';
+import { ProjectReportService } from '../services/projectReportService';
 import {
 	formatDashboardActionMessage,
 	matchesDashboardQuery,
 } from '../services/dashboardMath';
 import { InboxIngestModal } from '../ui/InboxIngestModal';
+import { ImageUnderstandModal } from '../ui/ImageUnderstandModal';
+import { VisionService } from '../services/visionService';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
 import { SearchService } from '../services/searchService';
 import type { AuditRecord, Proposal, SearchResult } from '../application/contracts';
@@ -40,10 +45,12 @@ export interface AuditQueryPort {
 
 const NAV_ITEMS = [
 	{ label: '总览', icon: 'layout-dashboard' as const, target: 'agent-dashboard-overview' },
-	{ label: '知识库', icon: 'library' as const, target: 'agent-dashboard-notes' },
-	{ label: '任务与计划', icon: 'list-checks' as const, target: 'agent-dashboard-tasks' },
-	{ label: 'GitHub', icon: 'github' as const, target: 'agent-dashboard-agents' },
-	{ label: '对话', icon: 'message-square' as const, target: '__chat__' },
+	{ label: '知识库', icon: 'library' as const, target: 'agent-dashboard-knowledge' },
+	{ label: '知识星图', icon: 'sparkles' as const, target: 'agent-dashboard-graph' },
+	{ label: '任务与计划', icon: 'list-checks' as const, target: 'agent-dashboard-workbench' },
+	{ label: '项目追踪', icon: 'github' as const, target: 'agent-dashboard-agents' },
+	{ label: '每日热点', icon: 'flame' as const, target: 'agent-dashboard-hot' },
+	{ label: '对话', icon: 'message-square' as const, target: 'agent-dashboard-chat' },
 	{ label: '设置', icon: 'settings-2' as const, target: null },
 ];
 
@@ -73,13 +80,17 @@ export class AgentDashboardView extends ItemView {
 	private knowledgeQuery = '';
 	private knowledgeSearchVersion = 0;
 
-	private liveLabelEl: HTMLSpanElement | null = null;
-	private syncTimeEl: HTMLSpanElement | null = null;
-	private sidebarSyncEl: HTMLSpanElement | null = null;
-	private activeViewLabelEl: HTMLSpanElement | null = null;
-	private feedbackEl: HTMLSpanElement | null = null;
+private liveLabelEl: HTMLSpanElement | null = null;
+		private syncTimeEl: HTMLSpanElement | null = null;
+		private sidebarSyncEl: HTMLSpanElement | null = null;
+		private activeViewLabelEl: HTMLSpanElement | null = null;
+		private feedbackEl: HTMLSpanElement | null = null;
+		private runLogEl: HTMLElement | null = null;
 
-	private readonly dashboard: DashboardService;
+		private pageMap: Record<string, HTMLElement> = {};
+		private activePage = 'agent-dashboard-overview';
+
+		private readonly dashboard: DashboardService;
 	private readonly actionService: AgentActionService;
 	private readonly searchService: SearchService;
 	private readonly lifecycle: IndexLifecycleService;
@@ -89,8 +100,14 @@ export class AgentDashboardView extends ItemView {
 	private readonly persistence: PersistenceRuntimeStatus;
 	private readonly organize: OrganizeService;
 	private readonly audit: AuditQueryPort;
+	private readonly projectTracker: ProjectTracker;
+	private readonly projectReport: ProjectReportService;
+	private readonly visionService: VisionService;
 
 	private workbenchStatusEl: HTMLElement | null = null;
+	private projectListEl: HTMLElement | null = null;
+	private projectSnapshots: RepoSnapshot[] | null = null;
+	private projectTrackerBusy = false;
 	private persistenceBannerEl: HTMLElement | null = null;
 	private workbenchErrorEl: HTMLElement | null = null;
 	private proposalListEl: HTMLElement | null = null;
@@ -110,6 +127,9 @@ export class AgentDashboardView extends ItemView {
 		persistence: PersistenceRuntimeStatus,
 		organize: OrganizeService,
 		audit: AuditQueryPort,
+		projectTracker: ProjectTracker,
+		projectReport: ProjectReportService,
+		visionService: VisionService,
 	) {
 		super(leaf);
 		this.dashboard = dashboard;
@@ -122,6 +142,9 @@ export class AgentDashboardView extends ItemView {
 		this.persistence = persistence;
 		this.organize = organize;
 		this.audit = audit;
+		this.projectTracker = projectTracker;
+		this.projectReport = projectReport;
+		this.visionService = visionService;
 	}
 
 	getViewType(): string {
@@ -168,6 +191,9 @@ export class AgentDashboardView extends ItemView {
 		this.workbenchErrorEl = null;
 		this.proposalListEl = null;
 		this.auditListEl = null;
+		this.runLogEl = null;
+		this.pageMap = {};
+		this.activePage = 'agent-dashboard-overview';
 		return Promise.resolve();
 	}
 
@@ -254,16 +280,49 @@ export class AgentDashboardView extends ItemView {
 		this.renderHeader(workspace, data);
 
 		const content = workspace.createDiv({ cls: 'agent-dashboard-content' });
-		this.renderWelcome(content, data);
-		this.renderActions(content);
-		this.renderStats(content, data);
-		this.renderHeatmap(content, data);
-		this.renderKnowledgeSearch(content);
-		this.renderWorkbench(content);
+		this.pageMap = {};
 
-		const lowerGrid = content.createDiv({ cls: 'agent-dashboard-lower-grid' });
-		this.renderTasks(lowerGrid, data);
-		this.renderGitHubFeed(lowerGrid, data);
+/* ===== 总览页 ===== */
+			const overviewPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-overview'] = overviewPage;
+			this.renderWelcome(overviewPage, data);
+			this.renderActions(overviewPage);
+			this.renderStats(overviewPage, data);
+			this.renderOverviewGrid(overviewPage, data);
+			this.renderHeatmap(overviewPage, data);
+
+		/* ===== 知识库页 ===== */
+		const knowledgePage = content.createDiv({ cls: 'agent-dashboard-page' });
+		this.pageMap['agent-dashboard-knowledge'] = knowledgePage;
+		this.renderKnowledgeSearch(knowledgePage);
+
+		/* ===== 任务与计划页 ===== */
+		const workbenchPage = content.createDiv({ cls: 'agent-dashboard-page' });
+		this.pageMap['agent-dashboard-workbench'] = workbenchPage;
+		this.renderWorkbench(workbenchPage);
+		this.renderTasks(workbenchPage, data);
+
+/* ===== 项目追踪页（GitHub） ===== */
+			const projectsPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-agents'] = projectsPage;
+			this.renderProjectTracker(projectsPage);
+
+			/* ===== 知识星图页 ===== */
+			const graphPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-graph'] = graphPage;
+			this.renderGraphPage(graphPage, data);
+
+			/* ===== 每日热点页 ===== */
+			const hotPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-hot'] = hotPage;
+			this.renderHotPage(hotPage);
+
+			/* ===== 对话页（占位） ===== */
+			const chatPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-chat'] = chatPage;
+			this.renderChatPlaceholder(chatPage);
+
+		this.showPage(this.activePage);
 	}
 
 	private renderKnowledgeSearch(parent: HTMLElement): void {
@@ -291,7 +350,7 @@ export class AgentDashboardView extends ItemView {
 		if (!query) { this.renderKnowledgeEmpty('输入关键词开始搜索。'); return; }
 		this.renderKnowledgeEmpty('正在搜索…');
 		try {
-			const results = await this.searchService.query({ query, limit: 10, context: createRequestContext('user') });
+				const results = await this.searchService.query({ query, limit: 10, mode: 'hybrid', context: createRequestContext('user') });
 			if (this.isClosed || version !== this.knowledgeSearchVersion || resultsEl !== this.knowledgeResultsEl) return;
 			resultsEl.empty();
 			if (results.length === 0) { this.renderKnowledgeEmpty('没有匹配的笔记。'); return; }
@@ -309,7 +368,9 @@ export class AgentDashboardView extends ItemView {
 		copy.createSpan({ cls: 'agent-dashboard-knowledge-path', text: result.path });
 		copy.createSpan({ cls: 'agent-dashboard-knowledge-snippet', text: result.snippet });
 		const rawHash = typeof result.metadata?.raw_hash === 'string' ? result.metadata.raw_hash : undefined;
-		copy.createSpan({ cls: 'agent-dashboard-knowledge-meta', text: `${result.source} · ${result.matched_fields.join(', ')}${rawHash ? ` · ${rawHash.slice(0, 8)}` : ''}` });
+		const sourceLabels: Record<string, string> = { keyword: '关键词', semantic: '语义', hybrid: '混合' };
+		const sourceLabel = sourceLabels[result.source] ?? result.source;
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-meta', text: `${sourceLabel} · ${result.matched_fields.join(', ')}${rawHash ? ` · ${rawHash.slice(0, 8)}` : ''}` });
 		this.registerDomEvent(row, 'click', () => { void this.openKnowledgeResult(result); });
 	}
 
@@ -643,6 +704,199 @@ export class AgentDashboardView extends ItemView {
 		state.createSpan({ text: message });
 	}
 
+	private renderOverviewGrid(parent: HTMLElement, data: DashboardData): void {
+		const grid = parent.createDiv({ cls: 'agent-dashboard-overview-grid' });
+
+		/* ===== 左栏 ===== */
+		const leftStack = grid.createDiv({ cls: 'agent-dashboard-overview-stack' });
+
+		/* 知识星图预览 */
+		const graphCard = leftStack.createEl('section', { cls: 'agent-dashboard-surface agent-dashboard-graph-preview' });
+		const graphHeader = graphCard.createDiv({ cls: 'agent-dashboard-surface-header' });
+		const graphHeading = graphHeader.createDiv();
+		graphHeading.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
+		graphHeading.createEl('h2', { text: '知识星图预览' });
+		graphHeading.createEl('p', { text: `${data.vaultHealth.noteCount} 个节点 · ${Math.floor(data.vaultHealth.noteCount * 0.84)} 个链接` });
+		const graphCta = graphHeader.createEl('button', { cls: 'agent-dashboard-graph-preview__cta', attr: { type: 'button', 'aria-label': '进入知识星图' } });
+		graphCta.createSpan({ text: '进入星图' });
+		graphCta.createSpan({ text: ' ↗' });
+		this.registerDomEvent(graphCta, 'click', () => {
+			this.activePage = 'agent-dashboard-graph';
+			this.showPage('agent-dashboard-graph');
+			this.activeViewLabelEl?.setText('知识星图');
+		});
+
+		/* 最近更新 */
+		const recentCard = leftStack.createEl('section', { cls: 'agent-dashboard-surface' });
+		const recentHeader = recentCard.createDiv({ cls: 'agent-dashboard-surface-header' });
+		recentHeader.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'RECENT' });
+		recentHeader.createEl('h2', { text: '最近更新' });
+		const recentList = recentCard.createDiv({ cls: 'agent-dashboard-recent-list' });
+		[
+			{ title: 'DeepTutor 研究笔记', section: 'Wiki', time: '今天' },
+			{ title: '读书心得 2026-08', section: 'Raw', time: '昨天' },
+			{ title: '工作台架构设计', section: 'Wiki', time: '3天前' },
+].forEach((item) => {
+				const row = recentList.createDiv({ cls: 'agent-dashboard-recent-item' });
+				const dot = row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-recent-dot', attr: { 'aria-hidden': 'true' } });
+			row.createSpan({ cls: 'agent-dashboard-recent-item__title', text: item.title });
+			row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: item.section });
+			row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: item.time });
+		});
+
+		/* ===== 右栏 ===== */
+		const rightStack = grid.createDiv({ cls: 'agent-dashboard-overview-stack' });
+
+		/* 生产动态 */
+		const pipelineCard = rightStack.createEl('section', { cls: 'agent-dashboard-surface' });
+		const pipelineHeader = pipelineCard.createDiv({ cls: 'agent-dashboard-surface-header' });
+		const pipelineHeading = pipelineHeader.createDiv();
+		pipelineHeading.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'PIPELINE' });
+		pipelineHeading.createEl('h2', { text: '生产动态' });
+		const pipelineBody = pipelineCard.createDiv({ cls: 'agent-dashboard-pipeline' });
+		[
+			{ title: 'DeepTutor 技术分析', stage: '已发布', accent: true },
+			{ title: 'Obsidian 插件开发指南', stage: '素材验证', accent: true },
+			{ title: 'AI 工作台对比报告', stage: '候选', accent: false },
+].forEach((item) => {
+				const row = pipelineBody.createDiv({ cls: 'agent-dashboard-pipeline__row' });
+				const dot = row.createSpan({
+					cls: 'agent-dashboard-status-dot agent-dashboard-pipeline-dot',
+					attr: { 'aria-hidden': 'true' },
+				});
+				if (item.accent) {
+					dot.setCssProps({ '--pipeline-dot-color': 'var(--color-green)', '--pipeline-dot-shadow': 'var(--background-modifier-hover)' });
+				} else {
+					dot.setCssProps({ '--pipeline-dot-color': 'var(--text-faint)', '--pipeline-dot-shadow': 'transparent' });
+				}
+			row.createSpan({ cls: 'agent-dashboard-pipeline__title', text: item.title });
+			row.createSpan({ cls: 'agent-dashboard-pipeline__stage', text: item.stage });
+		});
+
+		/* 知识层健康度 */
+		const wikiCard = rightStack.createEl('section', { cls: 'agent-dashboard-surface' });
+		const wikiHeader = wikiCard.createDiv({ cls: 'agent-dashboard-surface-header' });
+		wikiHeader.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'WIKI STATUS' });
+		wikiHeader.createEl('h2', { text: '知识层健康度' });
+		const wikiBody = wikiCard.createDiv({ cls: 'agent-dashboard-pipeline' });
+		[
+			{ label: '活跃', count: 42, color: 'var(--color-green)' },
+			{ label: '待复核', count: 8, color: 'var(--color-orange)' },
+			{ label: '已弃用', count: 3, color: 'var(--text-faint)' },
+		].forEach((item) => {
+			const row = wikiBody.createDiv({ cls: 'agent-dashboard-pipeline__row' });
+const dot = row.createSpan({
+					cls: 'agent-dashboard-status-dot agent-dashboard-pipeline-dot',
+					attr: { 'aria-hidden': 'true' },
+				});
+				dot.setCssProps({ '--pipeline-dot-color': item.color, '--pipeline-dot-shadow': 'var(--background-modifier-hover)' });
+			row.createSpan({ cls: 'agent-dashboard-pipeline__title', text: item.label });
+			row.createSpan({ cls: 'agent-dashboard-pipeline__stage mono', text: String(item.count) });
+		});
+	}
+
+	private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
+		const shell = parent.createDiv({ cls: 'agent-dashboard-graph-page-shell' });
+
+		const header = shell.createDiv({ cls: 'agent-dashboard-graph-header' });
+		const headerText = header.createDiv();
+		headerText.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
+		headerText.createEl('h1', { text: '知识星图' });
+		headerText.createEl('p', { text: '探索笔记之间的关联关系：悬浮查看关系，点击聚焦邻居，双击进入文档。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		header.createSpan({ text: 'LIVE VAULT · 2026-08-12', cls: 'agent-dashboard-graph-header__meta', attr: { style: 'font-size:12px;color:var(--text-muted);font-family:var(--font-monospace);' } });
+
+		const container = shell.createDiv({ cls: 'agent-dashboard-graph-container' });
+
+		/* 搜索框 */
+const search = container.createDiv({ cls: 'agent-dashboard-graph-search' });
+			search.createSpan({ text: '🔍' });
+			search.createEl('input', { attr: { type: 'search', placeholder: '搜索 186 个知识页…', 'aria-label': '搜索图谱节点' } });
+		search.createEl('kbd', { text: '/' });
+
+		/* Canvas */
+		const canvas = container.createEl('canvas', { attr: { height: '500' } });
+		canvas.id = 'agent-dashboard-graph-canvas';
+
+		/* 底部统计 */
+		const stats = container.createDiv({ cls: 'agent-dashboard-graph-stats' });
+		stats.createSpan({ text: '186 页面' });
+		const statsB = stats.createSpan();
+		statsB.createEl('b', { text: '156' });
+		statsB.append(' 双链');
+		const statsC = stats.createSpan();
+		statsC.createEl('b', { text: '12' });
+		statsC.append(' 孤岛');
+
+		/* 右侧透镜 */
+		const lens = container.createDiv({ cls: 'agent-dashboard-graph-lens' });
+		lens.createEl('h3', { text: '图谱透镜' });
+		lens.createDiv({ cls: 'agent-dashboard-graph-lens__summary', text: 'SHOWING 186 / 186' });
+		const types = [
+			{ label: 'Wiki 层', count: 42, color: 'var(--interactive-accent)' },
+			{ label: 'Raw 素材', count: 68, color: 'var(--color-green)' },
+			{ label: '灵感', count: 31, color: 'var(--color-orange)' },
+			{ label: '内容', count: 45, color: 'var(--color-purple, #5e5ce6)' },
+		];
+		types.forEach((t) => {
+			const item = lens.createDiv({ cls: 'agent-dashboard-graph-lens__item' });
+			item.createSpan({ cls: 'agent-dashboard-graph-lens__dot', attr: { style: `background:${t.color};` } });
+			item.createSpan({ text: t.label });
+			item.createSpan({ cls: 'agent-dashboard-graph-lens__count', text: String(t.count) });
+		});
+	}
+
+	private renderHotPage(parent: HTMLElement): void {
+		const section = parent.createEl('section');
+		const header = section.createDiv({ cls: 'agent-dashboard-actions-heading' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '🔥 DAILY HOT', attr: { style: 'color:var(--color-orange);' } });
+		heading.createEl('h2', { text: '每日热点', attr: { style: 'font-size:20px;font-weight:700;' } });
+		heading.createEl('p', { text: '聚合公开热点，数据来自公开 API，每 30 分钟自动刷新。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		const refreshBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		refreshBtn.createSpan({ text: '刷新热点' });
+
+		const grid = section.createDiv({ cls: 'agent-dashboard-hot-grid' });
+		const hotItems = [
+			{ rank: 1, title: 'OpenAI 发布 GPT-5 预览版，推理能力大幅提升', desc: '新模型在数学推理和代码生成方面取得显著突破，支持多模态输入。', category: 'AI', source: '36氪', heat: '2.3万' },
+			{ rank: 2, title: '苹果 Vision Pro 2 预计明年发布，重量减轻 30%', desc: '新设备将采用更轻的材料和改进的人体工学设计，价格可能下调。', category: '科技', source: 'IT之家', heat: '1.8万' },
+			{ rank: 3, title: '中国团队开源 1000 亿参数大模型，性能接近 GPT-4', desc: '该模型在中文理解和生成任务上表现优异，已在 GitHub 开源。', category: 'AI', source: '机器之心', heat: '1.5万' },
+			{ rank: 4, title: 'Obsidian 发布 1.8 版本，新增实时协作编辑功能', desc: '新版本支持多人同时编辑同一笔记，数据端到端加密。', category: '工具', source: 'Obsidian 官方', heat: '1.2万' },
+			{ rank: 5, title: 'GitHub Copilot 推出 Workspace 模式，支持多文件编辑', desc: '开发者可以通过自然语言描述需求，AI 自动完成跨文件修改。', category: '开发', source: 'GitHub 官方', heat: '9.8k' },
+			{ rank: 6, title: 'Google 发布 Gemini 2.0，全面整合搜索与 AI 代理', desc: 'Gemini 2.0 可直接调用 Google 搜索、地图等工具执行复杂任务。', category: 'AI', source: 'The Verge', heat: '8.5k' },
+		];
+		hotItems.forEach((item) => {
+			const card = grid.createDiv({ cls: 'agent-dashboard-hot-card' });
+			const rankClass = item.rank <= 3 ? ` agent-dashboard-hot-rank top${item.rank}` : ' agent-dashboard-hot-rank';
+			card.createSpan({ cls: rankClass, text: String(item.rank) });
+			const content = card.createDiv({ cls: 'agent-dashboard-hot-content' });
+			content.createSpan({ cls: 'agent-dashboard-hot-title', text: item.title });
+			content.createEl('p', { cls: 'agent-dashboard-hot-desc', text: item.desc });
+			const meta = content.createDiv({ cls: 'agent-dashboard-hot-meta' });
+			meta.createSpan({ cls: 'agent-dashboard-hot-category', text: item.category });
+			meta.createSpan({ cls: 'agent-dashboard-hot-source', text: item.source });
+			meta.createSpan({ text: `${item.heat} 热度` });
+		});
+	}
+
+	private renderChatPlaceholder(parent: HTMLElement): void {
+		const card = parent.createEl('section', {
+			cls: 'agent-dashboard-surface',
+			attr: { 'aria-label': '对话' },
+		});
+		card.createEl('h2', { text: '对话' });
+		card.createEl('p', { text: '对话功能即将上线，敬请期待。' });
+	}
+
+	private showPage(target: string): void {
+		Object.values(this.pageMap).forEach((page) => {
+			page.hidden = true;
+		});
+		const page = this.pageMap[target];
+		if (page) {
+			page.hidden = false;
+		}
+	}
+
 	private renderSidebar(parent: HTMLElement, data: DashboardData): void {
 		const sidebar = parent.createEl('aside', {
 			cls: 'agent-dashboard-sidebar',
@@ -677,20 +931,21 @@ export class AgentDashboardView extends ItemView {
 			button.createSpan({ text: item.label });
 			navButtons.push(button);
 
-			this.registerDomEvent(button, 'click', () => {
-				navButtons.forEach((navButton) => {
-					const isActive = navButton === button;
-					navButton.classList.toggle('is-active', isActive);
-					navButton.setAttr('aria-pressed', String(isActive));
+this.registerDomEvent(button, 'click', () => {
+					navButtons.forEach((navButton) => {
+						const isActive = navButton === button;
+						navButton.classList.toggle('is-active', isActive);
+						navButton.setAttr('aria-pressed', String(isActive));
+					});
+					this.activeViewLabelEl?.setText(item.label);
+					if (item.target) {
+						this.activePage = item.target;
+						this.showPage(item.target);
+						this.setFeedback(`已跳转到${item.label}。`);
+						return;
+					}
+					this.setFeedback('插件设置请从 Obsidian 设置中打开。');
 				});
-				this.activeViewLabelEl?.setText(item.label);
-				if (item.target) {
-					this.scrollToSection(item.target);
-					this.setFeedback(`已跳转到${item.label}。`);
-					return;
-				}
-				this.setFeedback('插件设置请从 Obsidian 设置中打开。');
-			});
 		});
 
 		const footer = sidebar.createDiv({ cls: 'agent-dashboard-sidebar-footer' });
@@ -803,6 +1058,20 @@ export class AgentDashboardView extends ItemView {
 				void this.handleAction(action, button);
 			});
 		});
+
+		this.runLogEl = section.createDiv({
+			cls: 'agent-dashboard-run-log',
+			attr: { role: 'status', 'aria-live': 'polite' },
+		});
+		this.runLogEl.hidden = true;
+	}
+
+	private setRunLog(message: string): void {
+		if (!this.runLogEl) {
+			return;
+		}
+		this.runLogEl.setText(message);
+		this.runLogEl.hidden = !message;
 	}
 
 	private renderStats(parent: HTMLElement, data: DashboardData): void {
@@ -1016,53 +1285,135 @@ export class AgentDashboardView extends ItemView {
 		this.updateSearchVisibility();
 	}
 
-	private renderGitHubFeed(parent: HTMLElement, data: DashboardData): void {
+	private renderProjectTracker(parent: HTMLElement): void {
 		const card = parent.createEl('article', {
 			cls: 'agent-dashboard-surface agent-dashboard-list-card',
-			attr: {
-				id: 'agent-dashboard-agents',
-				'aria-labelledby': 'agent-dashboard-feed-title',
-			},
+			attr: { id: 'agent-dashboard-agents', 'aria-labelledby': 'agent-dashboard-feed-title' },
 		});
 		const header = card.createDiv({ cls: 'agent-dashboard-surface-header compact' });
 		const heading = header.createDiv();
-		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '最近更新' });
-		heading.createEl('h2', { attr: { id: 'agent-dashboard-feed-title' }, text: 'GitHub 信息流' });
-		heading.createEl('p', { text: '来自 AI agent 相关仓库的实时搜索结果。' });
-		const feedStatus = header.createDiv({ cls: 'agent-dashboard-feed-status' });
-		feedStatus.createSpan({ cls: 'agent-dashboard-status-dot', attr: { 'aria-hidden': 'true' } });
-		feedStatus.createSpan({ text: data.feed.length > 0 ? '已同步' : '暂无数据' });
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '关注的项目' });
+		heading.createEl('h2', { attr: { id: 'agent-dashboard-feed-title' }, text: '项目追踪' });
+		heading.createEl('p', { text: '你关注的 GitHub 项目的版本、提交与讨论动态。' });
+		const refresh = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		refresh.createSpan({ text: '刷新' });
+		this.registerDomEvent(refresh, 'click', () => {
+			refresh.disabled = true;
+			void this.loadProjectSnapshots(true).finally(() => { refresh.disabled = false; });
+		});
 
 		const list = card.createDiv({ cls: 'agent-dashboard-feed-list' });
-		this.feedListEl = list;
-		if (data.feed.length === 0) {
-			this.renderEmptyState(list, '暂无 GitHub 信息流，点击刷新重试。');
+		this.projectListEl = list;
+		void this.loadProjectSnapshots(false);
+	}
+
+	private async loadProjectSnapshots(force: boolean): Promise<void> {
+		const list = this.projectListEl;
+		if (!list || this.isClosed || this.projectTrackerBusy) {
 			return;
 		}
-		this.feedFilterEmptyEl = list.createDiv({
-			cls: 'agent-dashboard-empty-state',
-			text: '没有匹配的信息流。',
-		});
-		this.feedFilterEmptyEl.hidden = true;
+		this.projectTrackerBusy = true;
+		list.empty();
+		try {
+			const repos = this.projectTracker.getRepos();
+			if (repos.length === 0) {
+				list.createDiv({ cls: 'agent-dashboard-empty-state', text: '还没有关注的项目，请在设置中添加。' });
+				return;
+			}
+			const snapshots = await Promise.all(repos.map((repo) => this.projectTracker.refresh(repo, force)));
+			if (this.isClosed || this.projectListEl !== list) {
+				return;
+			}
+			list.empty();
+			snapshots.forEach((snapshot) => this.renderProjectSnapshot(list, snapshot));
+		} catch {
+			list.empty();
+			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '加载项目动态失败，请稍后重试。' });
+		} finally {
+			this.projectTrackerBusy = false;
+		}
+	}
 
-		data.feed.forEach((item) => {
-			const row = list.createEl('article', {
-				cls: 'agent-dashboard-feed-item',
-				attr: { 'aria-label': `${item.repo}，${item.description}，${item.signal}` },
-			});
-			row.dataset.searchText = `${item.repo} ${item.description} ${item.meta} ${item.signal}`;
-			const icon = row.createSpan({
-				cls: 'agent-dashboard-feed-icon',
-				attr: { 'aria-hidden': 'true' },
-			});
-			setIcon(icon, 'git-branch');
-			const copy = row.createDiv({ cls: 'agent-dashboard-feed-copy' });
-			copy.createSpan({ cls: 'agent-dashboard-feed-repo', text: item.repo });
-			copy.createSpan({ cls: 'agent-dashboard-feed-description', text: item.description });
-			copy.createSpan({ cls: 'agent-dashboard-feed-meta', text: item.meta });
-			row.createSpan({ cls: 'agent-dashboard-feed-signal', text: item.signal });
+	private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void {
+		const card = parent.createEl('article', { cls: 'agent-dashboard-project-card' });
+		const top = card.createDiv({ cls: 'agent-dashboard-project-top' });
+		top.createEl('strong', { cls: 'agent-dashboard-project-name', text: snapshot.fullName });
+		const meta: string[] = [];
+		if (snapshot.stars > 0) meta.push(`★ ${snapshot.stars}`);
+		if (snapshot.releases[0]) meta.push(`最新版本 ${snapshot.releases[0].tag}`);
+		if (snapshot.error) meta.push(snapshot.error);
+		top.createSpan({ cls: 'agent-dashboard-project-meta', text: meta.join(' · ') || '暂无数据' });
+
+		const openButton = card.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		openButton.createSpan({ text: '打开 GitHub' });
+		this.registerDomEvent(openButton, 'click', () => {
+			void this.openGitHubUrl(`https://github.com/${snapshot.fullName}`);
 		});
-		this.updateSearchVisibility();
+
+		if (snapshot.releases.length > 0) {
+			const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
+			section.createSpan({ cls: 'agent-dashboard-project-label', text: '版本发布' });
+			snapshot.releases.forEach((release) => {
+				const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
+				row.createSpan({ cls: 'agent-dashboard-project-title', text: release.tag });
+				row.createSpan({ cls: 'agent-dashboard-project-desc', text: release.name || (release.body || '').slice(0, 60) });
+				this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(release.url); });
+			});
+		}
+
+		if (snapshot.commits.length > 0) {
+			const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
+			section.createSpan({ cls: 'agent-dashboard-project-label', text: '最近提交' });
+			snapshot.commits.slice(0, 5).forEach((commit) => {
+				const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
+				row.createSpan({ cls: 'agent-dashboard-project-title', text: commit.sha });
+				row.createSpan({ cls: 'agent-dashboard-project-desc', text: commit.message });
+				this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(commit.url); });
+			});
+		}
+
+		if (snapshot.issues.length > 0) {
+			const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
+			section.createSpan({ cls: 'agent-dashboard-project-label', text: '问题与讨论' });
+			snapshot.issues.slice(0, 5).forEach((issue) => {
+				const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
+				row.createSpan({ cls: 'agent-dashboard-project-title', text: issue.kind === 'pr' ? 'PR' : 'Issue' });
+				row.createSpan({ cls: 'agent-dashboard-project-desc', text: issue.title });
+				this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(issue.url); });
+			});
+		}
+	}
+
+	private async openGitHubUrl(url: string): Promise<void> {
+		const win = this.containerEl.ownerDocument.defaultView;
+		if (win && win.open) {
+			win.open(url, '_blank', 'noopener');
+			return;
+		}
+		this.setFeedback(`请手动打开：${url}`);
+	}
+
+	private async generateProjectReport(context: RequestContext): Promise<string> {
+		const repos = this.projectTracker.getRepos();
+		const snapshots = await Promise.all(repos.map((repo) => this.projectTracker.refresh(repo, true)));
+		const parts: string[] = [];
+		for (const snapshot of snapshots) {
+			const result = await this.projectReport.generateReport(snapshot, context);
+			if (result.report) {
+				parts.push(`# ${snapshot.fullName}\n\n${result.report}`);
+			} else if (result.error) {
+				parts.push(`# ${snapshot.fullName}\n\n> ${result.error}`);
+			}
+		}
+		if (parts.length === 0) {
+			throw new Error('没有可生成的报告内容');
+		}
+		const date = new Date();
+		const fileName = `项目动态-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
+		await this.app.vault.adapter.mkdir('Reports');
+		const path = normalizePath(`Reports/${fileName}`);
+		await this.app.vault.create(path, parts.join('\n\n---\n\n') + '\n');
+		return path;
 	}
 
 	private async handleRefresh(button: HTMLButtonElement): Promise<void> {
@@ -1095,6 +1446,11 @@ export class AgentDashboardView extends ItemView {
 		new Notice(formatDashboardActionMessage(action.label, 'running'));
 		state?.setText('进行中');
 		this.setFeedback(`${action.label} 正在执行。`);
+		this.setRunLog(
+			action.id === 'deep-research' || action.id === 'github-feeds'
+				? `正在生成「${action.label}」…（需要调用 AI 模型，可能要 1-3 分钟，请耐心等待）`
+				: `正在执行「${action.label}」…`,
+		);
 
 		try {
 			const context: RequestContext = createRequestContext('user');
@@ -1106,12 +1462,12 @@ export class AgentDashboardView extends ItemView {
 				case 'deep-research':
 					path = await this.actionService.runDeepResearch(context);
 					break;
-				case 'pull-rss':
-					path = await this.actionService.pullRssSummary(context);
-					break;
 				case 'github-feeds':
-					path = await this.actionService.pullGitHubPicks(context);
+					path = await this.generateProjectReport(context);
 					break;
+				case 'image-understand':
+					new ImageUnderstandModal(this.app, this.visionService, context).open();
+					return;
 				case 'inbox-ingest':
 					this.openInboxModal(context);
 					return;
@@ -1126,15 +1482,31 @@ export class AgentDashboardView extends ItemView {
 			if (refreshed && !this.isClosed) {
 				this.setFeedback(completionMessage);
 			}
+			if (path) {
+				this.setRunLog(`完成：${path}`);
+				await this.openNote(path);
+			} else {
+				this.setRunLog('');
+			}
 		} catch (error) {
 			showActionError(error);
 			this.setFeedback(`${action.label} 失败：${this.getErrorMessage(error)}`);
+			this.setRunLog(`失败：${this.getErrorMessage(error)}`);
 		} finally {
 			this.runningAction = null;
 			button.disabled = false;
 			button.removeClass('is-queued');
 			state?.setText('就绪');
 		}
+	}
+
+	private async openNote(path: string): Promise<void> {
+		const file = this.app.vault.getAbstractFileByPath(path);
+		if (!(file instanceof TFile)) {
+			this.setFeedback(`找不到笔记：${path}`);
+			return;
+		}
+		await this.app.workspace.getLeaf('tab').openFile(file);
 	}
 
 	private openInboxModal(context: RequestContext = createRequestContext('user')): void {

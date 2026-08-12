@@ -3,6 +3,8 @@ import type { App } from 'obsidian';
 import type { AgentDashboardSettings } from '../settings.ts';
 import { toSearchConfig } from '../application/featureFlags.ts';
 import { UnavailableSemanticSearch } from '../adapters/unavailableSemanticSearch.ts';
+import { OllamaSemanticSearch } from '../adapters/ollamaSemanticSearch.ts';
+import { OllamaEmbedding } from '../adapters/ollamaEmbedding.ts';
 import { ObsidianVaultReader } from '../adapters/obsidianVaultReader.ts';
 import { ObsidianWritePort } from '../adapters/obsidianWritePort.ts';
 import { InMemoryVaultIndex } from '../adapters/in-memory-vault-index.ts';
@@ -30,7 +32,8 @@ export interface RuntimeAuditQuery { listRecent(limit: number, context: RequestC
 export interface RuntimeServices { reader: ObsidianVaultReader; index: InMemoryVaultIndex; lifecycle: IndexLifecycleService; search: SearchService; write: WriteService; organize: OrganizeService; proposals: ProposalService; approvals: ApprovalService; apply: ProposalApplyService; persistence: PersistenceRuntimeStatus; restore(context: RequestContext): Promise<PersistenceRuntimeStatus>; audit: RuntimeAuditQuery; }
 export async function composeRuntime(app: App, settings: AgentDashboardSettings): Promise<RuntimeServices> {
   const reader = new ObsidianVaultReader(app); const index = new InMemoryVaultIndex(reader); const lifecycle = new IndexLifecycleService(reader, index); const flags = settings.featureFlags;
-  const search = new SearchService(index, new UnavailableSemanticSearch(), toSearchConfig(flags));
+  const semantic = flags.semantic_search ? new OllamaSemanticSearch(reader, new OllamaEmbedding(settings.agent)) : new UnavailableSemanticSearch();
+  const search = new SearchService(index, semantic, toSearchConfig(flags));
   const writePort = new ObsidianWritePort(app);
   const auditStore = new JsonlAuditStore(new ObsidianJsonlStorage(app, '_workbench/audit/events.jsonl'));
   const proposalStore = new JsonlProposalStore(new ObsidianJsonlStorage(app, '_workbench/proposals/records.jsonl'));

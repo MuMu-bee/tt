@@ -1,8 +1,4 @@
 import { App, TFile, Notice, normalizePath } from 'obsidian';
-import type {
-	GitHubFeedItem,
-	RssFeedItem,
-} from '../data/dashboardTypes';
 import type { ModelPort } from '../ports/modelPort';
 import {
 	createRequestContext,
@@ -43,18 +39,6 @@ export class AgentActionService {
 			context,
 		);
 		return this.writeReport(`deep-research-${date}.md`, report);
-	}
-
-	async pullRssSummary(context: RequestContext = createRequestContext()): Promise<string> {
-		const items = await this.dashboard.getFeeds().getRssFeed(true);
-		const report = await this.generateReport(this.buildRssPrompt(items), context);
-		return this.writeReport(`rss-summary-${toDateKey(new Date())}.md`, report);
-	}
-
-	async pullGitHubPicks(context: RequestContext = createRequestContext()): Promise<string> {
-		const items = await this.dashboard.getFeeds().getGitHubFeed(true);
-		const report = await this.generateReport(this.buildGitHubPrompt(items), context);
-		return this.writeReport(`github-picks-${toDateKey(new Date())}.md`, report);
 	}
 
 	async ingestInbox(
@@ -113,20 +97,6 @@ export class AgentActionService {
 		const path = normalizePath(`Reports/${fileName}`);
 		await this.writer.writeText(path, content.endsWith('\n') ? content : `${content}\n`);
 		return path;
-	}
-
-	private buildRssPrompt(items: RssFeedItem[]): string {
-		return [
-			'请用中文总结以下 RSS 新闻，输出 Markdown，包含标题、来源链接、核心要点和值得跟进的方向。',
-			JSON.stringify(items),
-		].join('\n\n');
-	}
-
-	private buildGitHubPrompt(items: GitHubFeedItem[]): string {
-		return [
-			'请从以下 GitHub AI Agent 项目中筛选值得关注的项目，输出中文 Markdown，说明项目用途、关注理由和 stars。',
-			JSON.stringify(items),
-		].join('\n\n');
 	}
 
 	private sanitizeTitle(value: string): string {
