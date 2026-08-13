@@ -487,21 +487,49 @@ private liveLabelEl: HTMLSpanElement | null = null;
 		}
 	}
 
-	private renderProposalList(proposals: Proposal[]): void {
-		const list = this.proposalListEl;
-		if (!list) {
-			return;
+private renderProposalList(proposals: Proposal[]): void {
+			const list = this.proposalListEl;
+			if (!list) {
+				return;
+			}
+			list.empty();
+
+			const sorted = [...proposals].sort((a, b) =>
+				a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0,
+			);
+			if (sorted.length === 0) {
+				list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无整理方案。先开启整理开关并生成计划。' });
+				return;
+			}
+
+			/* 按状态分组，类似 GitHub PR Inbox */
+			const groups = new Map<string, Proposal[]>();
+			const statusKeys = ['pending', 'approved', 'applied', 'rejected', 'conflict', 'failed'];
+			statusKeys.forEach((s) => groups.set(s, []));
+			sorted.forEach((p) => {
+				const key = groups.has(p.status) ? p.status : 'pending';
+				groups.get(key)!.push(p);
+			});
+
+			const groupLabels: Record<string, { label: string; icon: string; color: string }> = {
+				pending: { label: '待审批', icon: '◉', color: 'var(--interactive-accent)' },
+				approved: { label: '已批准，待执行', icon: '✓', color: 'var(--color-green)' },
+				applied: { label: '已应用', icon: '✔', color: 'var(--color-green)' },
+				rejected: { label: '已拒绝', icon: '✕', color: 'var(--color-red)' },
+				conflict: { label: '冲突', icon: '⚠', color: 'var(--color-orange)' },
+				failed: { label: '失败', icon: '✗', color: 'var(--color-red)' },
+			};
+
+			Array.from(groups.entries()).forEach(([status, items]) => {
+				if (items.length === 0) return;
+				const section = list.createDiv({ cls: 'agent-dashboard-proposal-group' });
+				const header = section.createDiv({ cls: 'agent-dashboard-proposal-group-header' });
+				header.createSpan({ cls: 'agent-dashboard-proposal-group-icon', text: groupLabels[status]?.icon ?? '•', attr: { style: `color:${groupLabels[status]?.color ?? 'var(--text-muted)'};` } });
+				header.createSpan({ cls: 'agent-dashboard-proposal-group-label', text: groupLabels[status]?.label ?? status });
+				header.createSpan({ cls: 'agent-dashboard-proposal-group-count', text: String(items.length) });
+				items.forEach((proposal) => this.renderProposalItem(section, proposal));
+			});
 		}
-		list.empty();
-		const sorted = [...proposals].sort((a, b) =>
-			a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0,
-		);
-		if (sorted.length === 0) {
-			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无整理方案。先开启整理开关并生成计划。' });
-			return;
-		}
-		sorted.forEach((proposal) => this.renderProposalItem(list, proposal));
-	}
 
 	private renderProposalItem(parent: HTMLElement, proposal: Proposal): void {
 		const actions = proposalActions(proposal, this.persistence);
@@ -654,9 +682,15 @@ private liveLabelEl: HTMLSpanElement | null = null;
 		});
 	}
 
-	private setWorkbenchStatus(message: string): void {
-		this.workbenchStatusEl?.setText(message);
-	}
+private setWorkbenchStatus(message: string): void {
+			this.workbenchStatusEl?.setText(message);
+			/* 给持久化横幅添加视觉反馈闪烁 */
+			if (message.includes('正在') && this.persistenceBannerEl) {
+				this.persistenceBannerEl.addClass('agent-dashboard-persistence-busy');
+			} else if (this.persistenceBannerEl) {
+				this.persistenceBannerEl.removeClass('agent-dashboard-persistence-busy');
+			}
+		}
 
 	private setWorkbenchError(message: string): void {
 		const errorEl = this.workbenchErrorEl;

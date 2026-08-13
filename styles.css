@@ -1226,6 +1226,7 @@
 	border: 1px solid transparent;
 	border-radius: 12px;
 	background: var(--background-primary-alt);
+	transition: box-shadow 0.3s ease;
 }
 
 .agent-dashboard-persistence-banner.is-ok {
@@ -1244,6 +1245,16 @@
 
 .agent-dashboard-persistence-banner.is-danger .agent-dashboard-persistence-title {
 	color: var(--color-red);
+}
+
+.agent-dashboard-persistence-busy {
+	box-shadow: 0 0 0 2px var(--interactive-accent);
+	animation: agent-dashboard-pulse 1.5s ease-in-out infinite;
+}
+
+@keyframes agent-dashboard-pulse {
+	0%, 100% { box-shadow: 0 0 0 2px var(--interactive-accent); }
+	50% { box-shadow: 0 0 0 4px var(--interactive-accent-hover); }
 }
 
 .agent-dashboard-persistence-title {
@@ -1298,10 +1309,45 @@
 	font-weight: 600;
 }
 
-.agent-dashboard-proposal-list,
-.agent-dashboard-audit-list {
+.agent-dashboard-proposal-list {
 	display: flex;
 	flex-direction: column;
+}
+
+.agent-dashboard-proposal-group {
+	margin-bottom: 8px;
+}
+
+.agent-dashboard-proposal-group:last-child {
+	margin-bottom: 0;
+}
+
+.agent-dashboard-proposal-group-header {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 0 4px;
+	border-bottom: 1px solid var(--background-modifier-border);
+	margin-bottom: 4px;
+}
+
+.agent-dashboard-proposal-group-icon {
+	font-size: 12px;
+	width: 16px;
+	text-align: center;
+}
+
+.agent-dashboard-proposal-group-label {
+	font-size: 12px;
+	font-weight: 600;
+	color: var(--text-normal);
+}
+
+.agent-dashboard-proposal-group-count {
+	margin-left: auto;
+	font-size: 11px;
+	color: var(--text-faint);
+	font-family: var(--font-monospace);
 }
 
 .agent-dashboard-proposal-item {
