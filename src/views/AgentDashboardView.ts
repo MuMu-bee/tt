@@ -1,4 +1,4 @@
-import { ItemView, Notice, normalizePath, setIcon, TFile } from 'obsidian';
+import { ItemView, Notice, normalizePath, requestUrl, setIcon, TFile } from 'obsidian';
 import type { WorkspaceLeaf } from 'obsidian';
 import type {
 	DashboardAction,
@@ -901,34 +901,69 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		refreshBtn.createSpan({ text: '刷新热点' });
 
 		const grid = section.createDiv({ cls: 'agent-dashboard-hot-grid' });
-		const hotItems = [
-			{ rank: 1, title: 'OpenAI 发布 GPT-5 预览版，推理能力大幅提升', desc: '新模型在数学推理和代码生成方面取得显著突破，支持多模态输入。', category: 'AI', source: '36氪', heat: '2.3万', detail: 'OpenAI 最新发布的 GPT-5 预览版在多项基准测试中表现优异，特别是在数学推理（MATH 基准提升 23%）和代码生成（HumanEval 提升 18%）方面取得显著突破。新模型支持文本、图像、音频多模态输入，API 价格与 GPT-4 持平。OpenAI 表示正式版将在 3 个月内发布。' },
-			{ rank: 2, title: '苹果 Vision Pro 2 预计明年发布，重量减轻 30%', desc: '新设备将采用更轻的材料和改进的人体工学设计，价格可能下调。', category: '科技', source: 'IT之家', heat: '1.8万', detail: '据供应链消息，苹果正在开发 Vision Pro 第二代产品，预计 2027 年第一季度发布。新设备重量将从目前的 650g 降至约 450g，采用更轻的钛合金框架和优化后的电池组。起售价可能从 3499 美元降至 2499 美元，以扩大市场覆盖。' },
-			{ rank: 3, title: '中国团队开源 1000 亿参数大模型，性能接近 GPT-4', desc: '该模型在中文理解和生成任务上表现优异，已在 GitHub 开源。', category: 'AI', source: '机器之心', heat: '1.5万', detail: '中国科学院自动化研究所联合多家高校开源了名为"夸父-100B"的千亿参数大语言模型。该模型在 C-Eval、CMMLU 等中文基准测试中达到 GPT-4 的 96% 水平，训练成本仅为 GPT-4 的 1/10。项目采用 Apache 2.0 许可证，已开放模型权重和推理代码。' },
-			{ rank: 4, title: 'Obsidian 发布 1.8 版本，新增实时协作编辑功能', desc: '新版本支持多人同时编辑同一笔记，数据端到端加密。', category: '工具', source: 'Obsidian 官方', heat: '1.2万', detail: 'Obsidian 1.8 版本正式发布，这是 Obsidian 首次引入实时协作功能。用户可以通过邀请链接与他人共同编辑笔记，所有数据均采用端到端加密。协作功能基于 CRDT 算法实现，支持离线编辑后自动合并。该功能免费使用，限制为每个 Vault 最多 5 人同时在线。' },
-			{ rank: 5, title: 'GitHub Copilot 推出 Workspace 模式，支持多文件编辑', desc: '开发者可以通过自然语言描述需求，AI 自动完成跨文件修改。', category: '开发', source: 'GitHub 官方', heat: '9.8k', detail: 'GitHub Copilot 推出全新的 Workspace 模式，允许开发者用自然语言描述整个功能需求，AI 自动分析代码库结构并生成跨多个文件的修改。Workspace 模式支持代码审查、冲突检测和逐步应用修改。该功能目前处于 Beta 阶段，已向所有 Copilot 订阅用户开放。' },
-			{ rank: 6, title: 'Google 发布 Gemini 2.0，全面整合搜索与 AI 代理', desc: 'Gemini 2.0 可直接调用 Google 搜索、地图等工具执行复杂任务。', category: 'AI', source: 'The Verge', heat: '8.5k', detail: 'Google 正式发布 Gemini 2.0，这是其最强大的 AI 模型。Gemini 2.0 原生集成了 Google 搜索、地图、Gmail 和日历等服务的工具调用能力，可自主完成复杂任务如旅行规划、购物比价和日程管理。API 定价较 1.5 版本降低 40%，支持 200 万 token 上下文窗口。' },
-		];
-		hotItems.forEach((item) => {
-			const card = grid.createDiv({ cls: 'agent-dashboard-hot-card' });
-			const rankClass = item.rank <= 3 ? ` agent-dashboard-hot-rank top${item.rank}` : ' agent-dashboard-hot-rank';
-			card.createSpan({ cls: rankClass, text: String(item.rank) });
-			const content = card.createDiv({ cls: 'agent-dashboard-hot-content' });
-			content.createSpan({ cls: 'agent-dashboard-hot-title', text: item.title });
-			content.createEl('p', { cls: 'agent-dashboard-hot-desc', text: item.desc });
-			const meta = content.createDiv({ cls: 'agent-dashboard-hot-meta' });
-			meta.createSpan({ cls: 'agent-dashboard-hot-category', text: item.category });
-			meta.createSpan({ cls: 'agent-dashboard-hot-source', text: item.source });
-			meta.createSpan({ text: `${item.heat} 热度` });
+		const loadingEl = grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
 
-			/* 详细内容区域（默认隐藏） */
-			const detail = content.createDiv({ cls: 'agent-dashboard-hot-detail', text: item.detail, attr: { style: 'display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--background-modifier-border);font-size:12px;color:var(--text-muted);line-height:1.6;' } });
-
-			this.registerDomEvent(card, 'click', () => {
-				const hidden = detail.style.display === 'none';
-				detail.style.display = hidden ? 'block' : 'none';
-				card.style.borderColor = hidden ? 'var(--interactive-accent)' : 'var(--background-modifier-border)';
+		const renderCards = (items: Array<{ rank: number; title: string; desc: string; category: string; source: string; heat: string; detail: string }>) => {
+			grid.empty();
+			items.forEach((item) => {
+				const card = grid.createDiv({ cls: 'agent-dashboard-hot-card' });
+				const rankClass = item.rank <= 3 ? ` agent-dashboard-hot-rank top${item.rank}` : ' agent-dashboard-hot-rank';
+				card.createSpan({ cls: rankClass, text: String(item.rank) });
+				const content = card.createDiv({ cls: 'agent-dashboard-hot-content' });
+				content.createSpan({ cls: 'agent-dashboard-hot-title', text: item.title });
+				content.createEl('p', { cls: 'agent-dashboard-hot-desc', text: item.desc });
+				const meta = content.createDiv({ cls: 'agent-dashboard-hot-meta' });
+				meta.createSpan({ cls: 'agent-dashboard-hot-category', text: item.category });
+				meta.createSpan({ cls: 'agent-dashboard-hot-source', text: item.source });
+				meta.createSpan({ text: `${item.heat} 热度` });
+				const detail = content.createDiv({ text: item.detail, attr: { style: 'display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--background-modifier-border);font-size:12px;color:var(--text-muted);line-height:1.6;' } });
+				this.registerDomEvent(card, 'click', () => {
+					const hidden = detail.style.display === 'none';
+					detail.style.display = hidden ? 'block' : 'none';
+					card.style.borderColor = hidden ? 'var(--interactive-accent)' : 'var(--background-modifier-border)';
+				});
 			});
+		};
+
+		/* Fallback mock data */
+		const mockData = [
+			{ rank: 1, title: 'OpenAI 发布 GPT-5 预览版，推理能力大幅提升', desc: '新模型在数学推理和代码生成方面取得显著突破，支持多模态输入。', category: 'AI', source: '36氪', heat: '2.3万', detail: 'OpenAI 最新发布的 GPT-5 预览版在多项基准测试中表现优异，API 价格与 GPT-4 持平。' },
+			{ rank: 2, title: '苹果 Vision Pro 2 预计明年发布，重量减轻 30%', desc: '新设备将采用更轻的材料和改进的人体工学设计，价格可能下调。', category: '科技', source: 'IT之家', heat: '1.8万', detail: '苹果正在开发 Vision Pro 第二代产品，预计 2027 年第一季度发布。' },
+			{ rank: 3, title: '中国团队开源 1000 亿参数大模型，性能接近 GPT-4', desc: '该模型在中文理解和生成任务上表现优异，已在 GitHub 开源。', category: 'AI', source: '机器之心', heat: '1.5万', detail: '中科院联合多家高校开源了"夸父-100B"千亿参数大语言模型，采用 Apache 2.0 许可证。' },
+			{ rank: 4, title: 'Obsidian 发布 1.8 版本，新增实时协作编辑功能', desc: '新版本支持多人同时编辑同一笔记，数据端到端加密。', category: '工具', source: 'Obsidian 官方', heat: '1.2万', detail: 'Obsidian 1.8 首次引入实时协作功能，基于 CRDT 算法，免费使用。' },
+			{ rank: 5, title: 'GitHub Copilot 推出 Workspace 模式', desc: '开发者可以通过自然语言描述需求，AI 自动完成跨文件修改。', category: '开发', source: 'GitHub 官方', heat: '9.8k', detail: 'Copilot Workspace 模式支持代码审查、冲突检测和逐步应用修改，Beta 阶段。' },
+			{ rank: 6, title: 'Google 发布 Gemini 2.0', desc: 'Gemini 2.0 可直接调用 Google 搜索、地图等工具执行复杂任务。', category: 'AI', source: 'The Verge', heat: '8.5k', detail: 'Gemini 2.0 原生集成 Google 搜索、地图、Gmail 等工具，API 定价降低 40%。' },
+		];
+
+		renderCards(mockData);
+
+		this.registerDomEvent(refreshBtn, 'click', async () => {
+			refreshBtn.disabled = true;
+			refreshBtn.setText('加载中…');
+			grid.empty();
+			grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
+			try {
+				const resp = await requestUrl({ url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists', method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
+				if (resp.status === 200 && resp.json?.data) {
+					const apiItems = resp.json.data.slice(0, 6).map((item: Record<string, unknown>, i: number) => ({
+						rank: i + 1,
+						title: (item.target as Record<string, unknown>)?.title as string ?? '热点',
+						desc: (item.target as Record<string, unknown>)?.excerpt ?? ((item.target as Record<string, unknown>)?.titleArea as Record<string, unknown>)?.text as string ?? '',
+						category: (item.feedSpecific as Record<string, unknown>)?.currentType ?? '热点',
+						source: '知乎',
+						heat: `${((item.detailText as string) ?? '').replace(/[^0-9]/g, '') || Math.floor(Math.random() * 10000)} 热度`,
+						detail: (item.target as Record<string, unknown>)?.excerpt as string ?? '点击查看详情',
+					}));
+					renderCards(apiItems);
+				} else {
+					renderCards(mockData);
+				}
+			} catch {
+				renderCards(mockData);
+			} finally {
+				refreshBtn.disabled = false;
+				refreshBtn.setText('刷新热点');
+			}
 		});
 	}
 
