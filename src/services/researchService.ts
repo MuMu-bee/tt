@@ -6,6 +6,13 @@ import type { ResearchPort, ResearchTask, ResearchTaskStatus, ResearchResult, Re
 const SEARCH_API = 'https://api.duckduckgo.com/?q=%s&format=json&no_html=1';
 const TASKS_DIR = '_workbench/research/';
 
+/* Sensitive patterns to detect before outbound requests */
+const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
+	{ pattern: /api[_-]?key|apikey|token|secret|password/i, label: 'API密钥' },
+	{ pattern: /\b[A-Za-z0-9]{32,}\b/, label: '疑似密钥' },
+	{ pattern: /身份证|手机号|银行卡|密码/i, label: '个人信息' },
+];
+
 /** Background research service that searches the web and saves results as vault notes. */
 export class ResearchService implements ResearchPort {
 	private readonly app: App;
@@ -45,6 +52,14 @@ export class ResearchService implements ResearchPort {
 	private async runTask(task: ResearchTask, context: RequestContext): Promise<void> {
 		task.status = 'running';
 		const sources: ResearchSource[] = [];
+
+		/* FR-022: sensitive content check before outbound request */
+		const sensitiveHits = SENSITIVE_PATTERNS.filter((s) => s.pattern.test(task.query));
+		if (sensitiveHits.length > 0) {
+			task.status = 'failed';
+			task.error = `查询包含敏感信息（${sensitiveHits.map((s) => s.label).join('、')}），已阻止外发请求`;
+			return;
+		}
 
 		try {
 			/* Search the web */

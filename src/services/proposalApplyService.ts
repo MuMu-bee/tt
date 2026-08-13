@@ -14,13 +14,15 @@ export class ProposalApplyService {
   private readonly writes: WriteService;
   private readonly port: WritePort;
   private readonly persistenceGate?: PersistenceGate;
+  private readonly snapshotHook?: (path: string, before: string, after: string, context: RequestContext) => Promise<void>;
 
-  constructor(proposals: ProposalStore, approvals: ApprovalStore, writes: WriteService, port: WritePort, persistenceGate?: PersistenceGate) {
+  constructor(proposals: ProposalStore, approvals: ApprovalStore, writes: WriteService, port: WritePort, persistenceGate?: PersistenceGate, snapshotHook?: (path: string, before: string, after: string, context: RequestContext) => Promise<void>) {
     this.proposals = proposals;
     this.approvals = approvals;
     this.writes = writes;
     this.port = port;
     this.persistenceGate = persistenceGate;
+    this.snapshotHook = snapshotHook;
   }
   async apply(proposalId: string, context: RequestContext): Promise<ProposalApplyResult> {
     if (this.persistenceGate && !this.persistenceGate.isWritable()) {
@@ -38,6 +40,10 @@ export class ProposalApplyService {
     const result = await this.writes.write({ path: proposal.target_path, content: proposal.after, before_hash: proposal.base_hash, kind: proposal.change_kind, scope_snapshot: { kind: 'file', value: proposal.target_path }, zone: proposal.target_zone, request_id: proposal.request_id }, context);
     const nextStatus: ProposalStatus = result.status === 'applied' ? 'applied' : result.status === 'conflict' ? 'conflict' : result.status === 'proposal_only' ? 'failed' : 'failed';
     await this.proposals.updateStatus(proposalId, nextStatus, context);
+    /* Save rollback snapshot after successful apply */
+    if (result.status === 'applied' && this.snapshotHook) {
+      try { await this.snapshotHook(proposal.target_path, proposal.before, proposal.after, context.child ? context.child() : context); } catch { /* snapshot failure is non-fatal */ }
+    }
     return { ...result, proposal_status: nextStatus };
   }
 }

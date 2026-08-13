@@ -12,7 +12,6 @@ import { SearchService } from './searchService.ts';
 import { IndexLifecycleService } from './indexLifecycleService.ts';
 import { WriteService } from './writeService.ts';
 import { OrganizeService, type OrganizePort } from './organizeService.ts';
-import { AuditService } from './auditService.ts';
 import type { AuditRecord, NoteRecord, SearchScope, VaultZone } from '../application/contracts.ts';
 import { ScopeService } from './scopeService.ts';
 import { parseVaultDocument } from '../domain/vault-document.ts';
@@ -21,9 +20,11 @@ import { JsonlApprovalStore } from '../adapters/jsonlApprovalStore.ts';
 import { JsonlAuditStore } from '../adapters/jsonlAuditStore.ts';
 import { JsonlAuditSink } from '../adapters/jsonlAuditSink.ts';
 import { ObsidianJsonlStorage } from '../adapters/obsidianJsonlStorage.ts';
+import { DualJsonlStorage } from '../adapters/dualJsonlStorage.ts';
 import { ProposalService } from './proposalService.ts';
 import { ApprovalService } from './approvalService.ts';
 import { ProposalApplyService } from './proposalApplyService.ts';
+import { RollbackService } from './rollbackService.ts';
 import { createRequestContext, type RequestContext } from '../application/requestContext.ts';
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts.ts';
 import { PersistenceGate } from './persistenceGate.ts';
@@ -36,10 +37,19 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
   const search = new SearchService(index, semantic, toSearchConfig(flags));
   const writePort = new ObsidianWritePort(app);
   const auditStore = new JsonlAuditStore(new ObsidianJsonlStorage(app, '_workbench/audit/events.jsonl'));
+  const auditDual = new DualJsonlStorage(app, '_workbench/audit/events.jsonl', 'audit/events.jsonl');
   const proposalStore = new JsonlProposalStore(new ObsidianJsonlStorage(app, '_workbench/proposals/records.jsonl'));
   const approvalStore = new JsonlApprovalStore(new ObsidianJsonlStorage(app, '_workbench/approvals/records.jsonl'));
   const persistenceGate = new PersistenceGate(flags.new_write_pipeline);
-  const write = new WriteService(writePort, new AuditService(new JsonlAuditSink(auditStore)), lifecycle, flags, persistenceGate);
+  /* Dual-write audit sink: writes to Vault store + plugin data dir */
+  const baseSink = new JsonlAuditSink(auditStore);
+  const write = new WriteService(writePort, {
+    append: async (event: AuditRecord, ctx: RequestContext): Promise<void> => {
+      await baseSink.append(event, ctx);
+      await auditDual.writeDual(JSON.stringify(event), ctx);
+    },
+    query: async (filter: import('../application/contracts.ts').AuditFilter, ctx: RequestContext) => baseSink.query(filter, ctx),
+  }, lifecycle, flags, persistenceGate);
   const scopeService = new ScopeService();
   const scanner: OrganizePort = { scan: async (scope: SearchScope, context) => {
     const notes: NoteRecord[] = [];
@@ -55,7 +65,8 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
   const organize = new OrganizeService(scanner, flags);
   const proposals = new ProposalService(proposalStore);
   const approvals = new ApprovalService(proposalStore, approvalStore);
-  const apply = new ProposalApplyService(proposalStore, approvalStore, write, writePort, persistenceGate);
+  const rollback = new RollbackService(app);
+  const apply = new ProposalApplyService(proposalStore, approvalStore, write, writePort, persistenceGate, async (path, before, after, ctx) => { await rollback.snapshot(path, before, after, ctx); });
   let persistence: PersistenceRuntimeStatus = { restored: false, write_enabled: false, degraded: true, stores: { proposals: { available: false, loaded: false, skipped_rows: 0 }, approvals: { available: false, loaded: false, skipped_rows: 0 }, audit: { available: false, loaded: false, skipped_rows: 0 } } };
   const restore = async (context: RequestContext): Promise<PersistenceRuntimeStatus> => {
     persistence = await persistenceGate.restore({ proposals: proposalStore, approvals: approvalStore, audit: auditStore }, context);
