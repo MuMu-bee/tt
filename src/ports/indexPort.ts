@@ -24,4 +24,5 @@ export interface IndexPort {
 	refresh?(paths: string[], context: RequestContext): Promise<import('../application/contracts').RefreshStatus>;
 	rebuild?(context: RequestContext): Promise<import('../application/contracts').RefreshStatus>;
 	health?(context: RequestContext): Promise<import('../application/contracts').Health>;
+	getGraphData?(): { nodes: Array<{ id: string; title: string; type: string; degree: number }>; edges: Array<{ source: string; target: string }>; stats: { nodeCount: number; edgeCount: number; isolatedCount: number } };
 }

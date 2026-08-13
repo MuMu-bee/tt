@@ -739,6 +739,10 @@ private setWorkbenchStatus(message: string): void {
 	}
 
 	private renderOverviewGrid(parent: HTMLElement, data: DashboardData): void {
+		const graphData = this.lifecycle.getGraphData();
+		const nodeCount = graphData.stats.nodeCount || data.vaultHealth.noteCount;
+		const edgeCount = graphData.stats.edgeCount || Math.floor(nodeCount * 0.4);
+
 		const grid = parent.createDiv({ cls: 'agent-dashboard-overview-grid' });
 
 		/* ===== 左栏 ===== */
@@ -749,8 +753,8 @@ private setWorkbenchStatus(message: string): void {
 		const graphHeader = graphCard.createDiv({ cls: 'agent-dashboard-surface-header' });
 		const graphHeading = graphHeader.createDiv();
 		graphHeading.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
-		graphHeading.createEl('h2', { text: '知识星图预览' });
-		graphHeading.createEl('p', { text: `${data.vaultHealth.noteCount} 个节点 · ${Math.floor(data.vaultHealth.noteCount * 0.84)} 个链接` });
+graphHeading.createEl('h2', { text: '知识星图预览' });
+			graphHeading.createEl('p', { text: `${nodeCount} 个节点 · ${edgeCount} 个链接` });
 		const graphCta = graphHeader.createEl('button', { cls: 'agent-dashboard-graph-preview__cta', attr: { type: 'button', 'aria-label': '进入知识星图' } });
 		graphCta.createSpan({ text: '进入星图' });
 		graphCta.createSpan({ text: ' ↗' });
@@ -829,7 +833,12 @@ const dot = row.createSpan({
 		});
 	}
 
-	private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
+private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
+		const graphData = this.lifecycle.getGraphData();
+		const nodeCount = graphData.stats.nodeCount || _data.vaultHealth.noteCount;
+		const edgeCount = graphData.stats.edgeCount || Math.floor(nodeCount * 0.4);
+		const isolatedCount = graphData.stats.isolatedCount || 0;
+
 		const shell = parent.createDiv({ cls: 'agent-dashboard-graph-page-shell' });
 
 		const header = shell.createDiv({ cls: 'agent-dashboard-graph-header' });
@@ -837,14 +846,14 @@ const dot = row.createSpan({
 		headerText.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
 		headerText.createEl('h1', { text: '知识星图' });
 		headerText.createEl('p', { text: '探索笔记之间的关联关系：悬浮查看关系，点击聚焦邻居，双击进入文档。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
-		header.createSpan({ text: 'LIVE VAULT · 2026-08-12', cls: 'agent-dashboard-graph-header__meta', attr: { style: 'font-size:12px;color:var(--text-muted);font-family:var(--font-monospace);' } });
+		header.createSpan({ text: `LIVE VAULT · ${new Date().toISOString().slice(0, 10)}`, cls: 'agent-dashboard-graph-header__meta', attr: { style: 'font-size:12px;color:var(--text-muted);font-family:var(--font-monospace);' } });
 
 		const container = shell.createDiv({ cls: 'agent-dashboard-graph-container' });
 
 		/* 搜索框 */
-const search = container.createDiv({ cls: 'agent-dashboard-graph-search' });
-			search.createSpan({ text: '🔍' });
-			search.createEl('input', { attr: { type: 'search', placeholder: '搜索 186 个知识页…', 'aria-label': '搜索图谱节点' } });
+		const search = container.createDiv({ cls: 'agent-dashboard-graph-search' });
+		search.createSpan({ text: '🔍' });
+		search.createEl('input', { attr: { type: 'search', placeholder: `搜索 ${nodeCount} 个知识页…`, 'aria-label': '搜索图谱节点' } });
 		search.createEl('kbd', { text: '/' });
 
 		/* Canvas */
@@ -853,29 +862,31 @@ const search = container.createDiv({ cls: 'agent-dashboard-graph-search' });
 
 		/* 底部统计 */
 		const stats = container.createDiv({ cls: 'agent-dashboard-graph-stats' });
-		stats.createSpan({ text: '186 页面' });
+		stats.createSpan({ text: `${nodeCount} 页面` });
 		const statsB = stats.createSpan();
-		statsB.createEl('b', { text: '156' });
+		statsB.createEl('b', { text: String(edgeCount) });
 		statsB.append(' 双链');
 		const statsC = stats.createSpan();
-		statsC.createEl('b', { text: '12' });
+		statsC.createEl('b', { text: String(isolatedCount) });
 		statsC.append(' 孤岛');
 
 		/* 右侧透镜 */
 		const lens = container.createDiv({ cls: 'agent-dashboard-graph-lens' });
 		lens.createEl('h3', { text: '图谱透镜' });
-		lens.createDiv({ cls: 'agent-dashboard-graph-lens__summary', text: 'SHOWING 186 / 186' });
-		const types = [
-			{ label: 'Wiki 层', count: 42, color: 'var(--interactive-accent)' },
-			{ label: 'Raw 素材', count: 68, color: 'var(--color-green)' },
-			{ label: '灵感', count: 31, color: 'var(--color-orange)' },
-			{ label: '内容', count: 45, color: 'var(--color-purple, #5e5ce6)' },
-		];
-		types.forEach((t) => {
+		lens.createDiv({ cls: 'agent-dashboard-graph-lens__summary', text: `SHOWING ${nodeCount} / ${nodeCount}` });
+
+		/* 统计各类型节点数 */
+		const typeCounts: Record<string, number> = { wiki: 0, raw: 0, inbox: 0, note: 0 };
+		graphData.nodes.forEach((n) => { typeCounts[n.type] = (typeCounts[n.type] ?? 0) + 1; });
+		const typeColors: Record<string, string> = { wiki: 'var(--interactive-accent)', raw: 'var(--color-green)', inbox: 'var(--color-orange)', note: 'var(--color-purple, #5e5ce6)' };
+		const typeLabels: Record<string, string> = { wiki: 'Wiki 层', raw: 'Raw 素材', inbox: '收件箱', note: '笔记' };
+
+		Object.entries(typeCounts).forEach(([type, count]) => {
+			if (count === 0) return;
 			const item = lens.createDiv({ cls: 'agent-dashboard-graph-lens__item' });
-			item.createSpan({ cls: 'agent-dashboard-graph-lens__dot', attr: { style: `background:${t.color};` } });
-			item.createSpan({ text: t.label });
-			item.createSpan({ cls: 'agent-dashboard-graph-lens__count', text: String(t.count) });
+			item.createSpan({ cls: 'agent-dashboard-graph-lens__dot', attr: { style: `background:${typeColors[type] ?? 'var(--text-muted)'};` } });
+			item.createSpan({ text: typeLabels[type] ?? type });
+			item.createSpan({ cls: 'agent-dashboard-graph-lens__count', text: String(count) });
 		});
 	}
 

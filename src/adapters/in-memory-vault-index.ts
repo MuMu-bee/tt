@@ -111,9 +111,67 @@ export class InMemoryVaultIndex implements IndexPort {
 		return this.ready ? 'ready' : 'unavailable';
 	}
 
-	/** Removes only derived memory; callers can recover by invoking rebuild. */
-	clearDerivedIndex(): void {
-		this.entries.clear();
-		this.ready = false;
+/** Removes only derived memory; callers can recover by invoking rebuild. */
+		clearDerivedIndex(): void {
+			this.entries.clear();
+			this.ready = false;
+		}
+
+		/** Returns graph data (nodes + edges) from indexed documents for knowledge graph. */
+		getGraphData(): { nodes: Array<{ id: string; title: string; type: string; degree: number }>; edges: Array<{ source: string; target: string }>; stats: { nodeCount: number; edgeCount: number; isolatedCount: number } } {
+			const nodes: Array<{ id: string; title: string; type: string; degree: number }> = [];
+			const degreeMap = new Map<string, number>();
+			const edgeSet = new Set<string>();
+			const edges: Array<{ source: string; target: string }> = [];
+
+			this.entries.forEach((entry, path) => {
+				const doc = entry.document;
+				const type = path.startsWith('Wiki') || path.startsWith('wiki') ? 'wiki'
+					: path.startsWith('Raw') || path.startsWith('raw') ? 'raw'
+					: path.startsWith('Inbox') || path.startsWith('inbox') ? 'inbox'
+					: 'note';
+				nodes.push({ id: path, title: doc.title, type, degree: 0 });
+				degreeMap.set(path, 0);
+			});
+
+			this.entries.forEach((entry, path) => {
+				const links = entry.document.links;
+				if (!links) return;
+				links.forEach((link) => {
+					const target = this.resolveLink(link);
+					if (target && degreeMap.has(path) && degreeMap.has(target)) {
+						const key = path < target ? `${path}::${target}` : `${target}::${path}`;
+						if (!edgeSet.has(key)) {
+							edgeSet.add(key);
+							degreeMap.set(path, (degreeMap.get(path) ?? 0) + 1);
+							degreeMap.set(target, (degreeMap.get(target) ?? 0) + 1);
+						}
+					}
+				});
+			});
+
+			nodes.forEach((n) => { n.degree = degreeMap.get(n.id) ?? 0; });
+			edgeSet.forEach((key) => {
+				const [s, t] = key.split('::');
+				if (s && t) edges.push({ source: s, target: t });
+			});
+
+			const isolatedCount = nodes.filter((n) => n.degree === 0).length;
+			return { nodes, edges, stats: { nodeCount: nodes.length, edgeCount: edges.length, isolatedCount } };
+		}
+
+		private resolveLink(link: string): string | null {
+			const normalized = link.replace(/\\/g, '/').toLowerCase();
+			for (const [path] of this.entries) {
+				const p = path.replace(/\\/g, '/').toLowerCase();
+				if (p === normalized || p === `${normalized}.md` || p.endsWith(`/${normalized}.md`) || p.endsWith(`/${normalized}`)) {
+					return path;
+				}
+			}
+			/* Try matching by title */
+			for (const [path, entry] of this.entries) {
+				if (entry.document.title.toLowerCase() === normalized) return path;
+			}
+			return null;
+		}
 	}
-}

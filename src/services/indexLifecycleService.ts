@@ -35,6 +35,14 @@ export class IndexLifecycleService {
 
 	getState(): IndexLifecycleState { return { ...this.state }; }
 
+	/** Returns graph data from the index for knowledge graph visualization. */
+	getGraphData(): { nodes: Array<{ id: string; title: string; type: string; degree: number }>; edges: Array<{ source: string; target: string }>; stats: { nodeCount: number; edgeCount: number; isolatedCount: number } } {
+		if (this.index.getGraphData) {
+			return this.index.getGraphData();
+		}
+		return { nodes: [], edges: [], stats: { nodeCount: 0, edgeCount: 0, isolatedCount: 0 } };
+	}
+
 	async rebuild(context: RequestContext = createRequestContext('background-task')): Promise<void> {
 		if (this.rebuildPromise) return this.rebuildPromise;
 		const previous = this.state;
