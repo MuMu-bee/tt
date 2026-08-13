@@ -1806,6 +1806,43 @@
 	border-radius: 980px;
 }
 
+/* ===== 系统健康 ===== */
+.agent-dashboard-health-list {
+	display: flex;
+	flex-direction: column;
+}
+
+.agent-dashboard-health-row {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 7px 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.agent-dashboard-health-row:last-child {
+	border-bottom: 0;
+}
+
+.agent-dashboard-health-dot {
+	width: 6px !important;
+	height: 6px !important;
+	flex-shrink: 0;
+	border-radius: 50%;
+}
+
+.agent-dashboard-health-label {
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--text-normal);
+}
+
+.agent-dashboard-health-value {
+	margin-left: auto;
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
 /* ===== 研究页 ===== */
 .agent-dashboard-research-input-area {
 	display: flex;

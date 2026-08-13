@@ -1,4 +1,4 @@
-import { MarkdownView, Plugin, TFile } from 'obsidian';
+import { MarkdownView, Notice, Plugin, TFile } from 'obsidian';
 import {
 	AgentDashboardSettingTab,
 	DEFAULT_SETTINGS,
@@ -15,6 +15,8 @@ import { ProjectReportService } from './services/projectReportService';
 import { VisionService } from './services/visionService';
 import { ResearchService } from './services/researchService';
 import { MemoryPublishService } from './services/memoryPublishService';
+import { TaskCoordinator } from './services/taskCoordinator';
+import { PatrolService } from './services/patrolService';
 import { CacheStore } from './services/cacheStore';
 import {
 	AgentDashboardView,
@@ -45,6 +47,25 @@ export default class AgentDashboardPlugin extends Plugin {
 			const researchService = new ResearchService(this.app);
 			const memoryPublish = new MemoryPublishService(this.app);
 
+			/* V0.5: TaskCoordinator + PatrolService */
+			const taskCoordinator = new TaskCoordinator();
+			const patrolService = new PatrolService(this.app, lifecycle);
+			taskCoordinator.register({
+				id: 'patrol',
+				name: '定时巡检',
+				description: '定期检查 Vault 健康状态、缺失 frontmatter 和索引状态',
+				intervalMs: 30 * 60 * 1000,
+				status: 'idle',
+				lastRun: null,
+				nextRun: null,
+				runCount: 0,
+				handler: async () => {
+					const report = await patrolService.patrol();
+					new Notice(`巡检完成：${report.noteCount} 篇笔记，${report.missingFrontmatter} 篇缺 frontmatter`);
+				},
+			});
+			taskCoordinator.start('patrol');
+
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
 (leaf) => new AgentDashboardView(
@@ -64,6 +85,7 @@ export default class AgentDashboardPlugin extends Plugin {
 					visionService,
 					researchService,
 					memoryPublish,
+					patrolService,
 				),
 		);
 

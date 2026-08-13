@@ -26,6 +26,7 @@ import type { PersistenceRuntimeStatus } from '../application/persistenceContrac
 import { IndexLifecycleService } from '../services/indexLifecycleService';
 import { ResearchService } from '../services/researchService';
 import { MemoryPublishService } from '../services/memoryPublishService';
+import { PatrolService } from '../services/patrolService';
 import { ProposalService } from '../services/proposalService';
 import { ApprovalService } from '../services/approvalService';
 import { ProposalApplyService } from '../services/proposalApplyService';
@@ -108,6 +109,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private readonly visionService: VisionService;
 		private readonly researchService: ResearchService;
 		private readonly memoryPublish: MemoryPublishService;
+		private readonly patrolService: PatrolService;
 
 	private workbenchStatusEl: HTMLElement | null = null;
 	private projectListEl: HTMLElement | null = null;
@@ -137,6 +139,7 @@ constructor(
 			visionService: VisionService,
 			researchService: ResearchService,
 			memoryPublish: MemoryPublishService,
+			patrolService: PatrolService,
 		) {
 			super(leaf);
 			this.dashboard = dashboard;
@@ -154,6 +157,7 @@ constructor(
 			this.visionService = visionService;
 			this.researchService = researchService;
 			this.memoryPublish = memoryPublish;
+			this.patrolService = patrolService;
 		}
 
 	getViewType(): string {
@@ -294,11 +298,12 @@ constructor(
 /* ===== 总览页 ===== */
 			const overviewPage = content.createDiv({ cls: 'agent-dashboard-page' });
 			this.pageMap['agent-dashboard-overview'] = overviewPage;
-			this.renderWelcome(overviewPage, data);
-			this.renderActions(overviewPage);
-			this.renderStats(overviewPage, data);
-			this.renderOverviewGrid(overviewPage, data);
-			this.renderHeatmap(overviewPage, data);
+this.renderWelcome(overviewPage, data);
+				this.renderActions(overviewPage);
+				this.renderStats(overviewPage, data);
+				this.renderOverviewGrid(overviewPage, data);
+				this.renderHealthPanel(overviewPage);
+				this.renderHeatmap(overviewPage, data);
 
 		/* ===== 知识库页 ===== */
 		const knowledgePage = content.createDiv({ cls: 'agent-dashboard-page' });
@@ -859,6 +864,54 @@ const dot = row.createSpan({
 				dot.setCssProps({ '--pipeline-dot-color': item.color, '--pipeline-dot-shadow': 'var(--background-modifier-hover)' });
 			row.createSpan({ cls: 'agent-dashboard-pipeline__title', text: item.label });
 			row.createSpan({ cls: 'agent-dashboard-pipeline__stage mono', text: String(item.count) });
+		});
+	}
+
+	private renderHealthPanel(parent: HTMLElement): void {
+		const card = parent.createEl('section', { cls: 'agent-dashboard-surface' });
+		const header = card.createDiv({ cls: 'agent-dashboard-surface-header' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'SYSTEM HEALTH' });
+		heading.createEl('h2', { text: '系统健康' });
+		const patrolBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		patrolBtn.createSpan({ text: '运行巡检' });
+
+		const statusEl = card.createDiv({ cls: 'agent-dashboard-health-list' });
+		const lifecycleState = this.lifecycle.getState();
+		const items = [
+			{ label: '索引状态', value: lifecycleState.status === 'ready' ? `就绪 · ${lifecycleState.count} 篇` : lifecycleState.status === 'rebuilding' ? '重建中' : '失败', ok: lifecycleState.status === 'ready' },
+			{ label: '持久化', value: this.persistence.degraded ? '降级' : this.persistence.restored ? '就绪' : '未恢复', ok: !this.persistence.degraded && this.persistence.restored },
+			{ label: '项目追踪', value: 'HKUDS/DeepTutor', ok: true },
+		];
+		items.forEach((item) => {
+			const row = statusEl.createDiv({ cls: 'agent-dashboard-health-row' });
+			const dot = row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-health-dot', attr: { style: `background:${item.ok ? 'var(--color-green)' : 'var(--color-orange)'};box-shadow:0 0 0 3px var(--background-modifier-hover);` } });
+			row.createSpan({ cls: 'agent-dashboard-health-label', text: item.label });
+			row.createSpan({ cls: 'agent-dashboard-health-value', text: item.value });
+		});
+
+		this.registerDomEvent(patrolBtn, 'click', async () => {
+			patrolBtn.disabled = true;
+			patrolBtn.setText('巡检中…');
+			try {
+				const report = await this.patrolService.patrol();
+				new Notice(`巡检完成：${report.noteCount} 篇笔记，${report.missingFrontmatter} 篇缺 frontmatter`);
+				statusEl.empty();
+				const rows = [
+					{ label: '笔记总数', value: String(report.noteCount), ok: report.noteCount > 0 },
+					{ label: '缺 frontmatter', value: String(report.missingFrontmatter), ok: report.missingFrontmatter === 0 },
+					{ label: '巡检时间', value: new Date(report.timestamp).toLocaleTimeString('zh-CN', { hour12: false }), ok: true },
+				];
+				rows.forEach((row) => {
+					const r = statusEl.createDiv({ cls: 'agent-dashboard-health-row' });
+					r.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-health-dot', attr: { style: `background:${row.ok ? 'var(--color-green)' : 'var(--color-orange)'};box-shadow:0 0 0 3px var(--background-modifier-hover);` } });
+					r.createSpan({ cls: 'agent-dashboard-health-label', text: row.label });
+					r.createSpan({ cls: 'agent-dashboard-health-value', text: row.value });
+				});
+			} finally {
+				patrolBtn.disabled = false;
+				patrolBtn.setText('运行巡检');
+			}
 		});
 	}
 
