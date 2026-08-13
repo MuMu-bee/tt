@@ -24,6 +24,8 @@ import { SearchService } from '../services/searchService';
 import type { AuditRecord, Proposal, SearchResult } from '../application/contracts';
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts';
 import { IndexLifecycleService } from '../services/indexLifecycleService';
+import { ResearchService } from '../services/researchService';
+import { MemoryPublishService } from '../services/memoryPublishService';
 import { ProposalService } from '../services/proposalService';
 import { ApprovalService } from '../services/approvalService';
 import { ProposalApplyService } from '../services/proposalApplyService';
@@ -48,6 +50,7 @@ const NAV_ITEMS = [
 	{ label: '知识库', icon: 'library' as const, target: 'agent-dashboard-knowledge' },
 	{ label: '知识星图', icon: 'sparkles' as const, target: 'agent-dashboard-graph' },
 	{ label: '任务与计划', icon: 'list-checks' as const, target: 'agent-dashboard-workbench' },
+	{ label: '研究', icon: 'search-check' as const, target: 'agent-dashboard-research' },
 	{ label: '项目追踪', icon: 'github' as const, target: 'agent-dashboard-agents' },
 	{ label: '每日热点', icon: 'flame' as const, target: 'agent-dashboard-hot' },
 	{ label: '对话', icon: 'message-square' as const, target: 'agent-dashboard-chat' },
@@ -103,6 +106,8 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private readonly projectTracker: ProjectTracker;
 	private readonly projectReport: ProjectReportService;
 	private readonly visionService: VisionService;
+		private readonly researchService: ResearchService;
+		private readonly memoryPublish: MemoryPublishService;
 
 	private workbenchStatusEl: HTMLElement | null = null;
 	private projectListEl: HTMLElement | null = null;
@@ -115,37 +120,41 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private workbenchToken = 0;
 	private organizeBusy = false;
 
-	constructor(
-		leaf: WorkspaceLeaf,
-		dashboard: DashboardService,
-		actionService: AgentActionService,
-		searchService: SearchService,
-		lifecycle: IndexLifecycleService,
-		proposals: ProposalService,
-		approvals: ApprovalService,
-		applyService: ProposalApplyService,
-		persistence: PersistenceRuntimeStatus,
-		organize: OrganizeService,
-		audit: AuditQueryPort,
-		projectTracker: ProjectTracker,
-		projectReport: ProjectReportService,
-		visionService: VisionService,
-	) {
-		super(leaf);
-		this.dashboard = dashboard;
-		this.actionService = actionService;
-		this.searchService = searchService;
-		this.lifecycle = lifecycle;
-		this.proposals = proposals;
-		this.approvals = approvals;
-		this.applyService = applyService;
-		this.persistence = persistence;
-		this.organize = organize;
-		this.audit = audit;
-		this.projectTracker = projectTracker;
-		this.projectReport = projectReport;
-		this.visionService = visionService;
-	}
+constructor(
+			leaf: WorkspaceLeaf,
+			dashboard: DashboardService,
+			actionService: AgentActionService,
+			searchService: SearchService,
+			lifecycle: IndexLifecycleService,
+			proposals: ProposalService,
+			approvals: ApprovalService,
+			applyService: ProposalApplyService,
+			persistence: PersistenceRuntimeStatus,
+			organize: OrganizeService,
+			audit: AuditQueryPort,
+			projectTracker: ProjectTracker,
+			projectReport: ProjectReportService,
+			visionService: VisionService,
+			researchService: ResearchService,
+			memoryPublish: MemoryPublishService,
+		) {
+			super(leaf);
+			this.dashboard = dashboard;
+			this.actionService = actionService;
+			this.searchService = searchService;
+			this.lifecycle = lifecycle;
+			this.proposals = proposals;
+			this.approvals = approvals;
+			this.applyService = applyService;
+			this.persistence = persistence;
+			this.organize = organize;
+			this.audit = audit;
+			this.projectTracker = projectTracker;
+			this.projectReport = projectReport;
+			this.visionService = visionService;
+			this.researchService = researchService;
+			this.memoryPublish = memoryPublish;
+		}
 
 	getViewType(): string {
 		return VIEW_TYPE_AGENT_DASHBOARD;
@@ -306,6 +315,11 @@ private liveLabelEl: HTMLSpanElement | null = null;
 			const projectsPage = content.createDiv({ cls: 'agent-dashboard-page' });
 			this.pageMap['agent-dashboard-agents'] = projectsPage;
 			this.renderProjectTracker(projectsPage);
+
+			/* ===== 研究页 ===== */
+			const researchPage = content.createDiv({ cls: 'agent-dashboard-page' });
+			this.pageMap['agent-dashboard-research'] = researchPage;
+			this.renderResearchPage(researchPage);
 
 			/* ===== 知识星图页 ===== */
 			const graphPage = content.createDiv({ cls: 'agent-dashboard-page' });
@@ -980,6 +994,84 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 				refreshBtn.setText('刷新热点');
 			}
 		});
+	}
+
+	private renderResearchPage(parent: HTMLElement): void {
+		const section = parent.createEl('section');
+		const header = section.createDiv({ cls: 'agent-dashboard-actions-heading' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '🔬 RESEARCH' });
+		heading.createEl('h2', { text: '后台研究', attr: { style: 'font-size:20px;font-weight:700;' } });
+		heading.createEl('p', { text: '提交研究任务，AI 自动搜索、整理资料并生成报告。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+
+		/* 输入区 */
+		const inputArea = section.createDiv({ cls: 'agent-dashboard-research-input-area' });
+		const input = inputArea.createEl('input', {
+			cls: 'agent-dashboard-chat-input',
+			attr: { type: 'text', placeholder: '输入研究主题…', 'aria-label': '研究主题' },
+		});
+		const submitBtn = inputArea.createEl('button', {
+			cls: 'agent-dashboard-chat-send-btn',
+			attr: { type: 'button' },
+		});
+		submitBtn.createSpan({ text: '开始研究' });
+
+		/* 任务列表 */
+		const taskList = section.createDiv({ cls: 'agent-dashboard-research-tasks' });
+
+		this.registerDomEvent(submitBtn, 'click', () => void this.handleResearchSubmit(input, taskList, submitBtn));
+		this.registerDomEvent(input, 'keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') void this.handleResearchSubmit(input, taskList, submitBtn);
+		});
+
+		/* 加载已有任务 */
+		void this.loadResearchTasks(taskList);
+	}
+
+	private async handleResearchSubmit(input: HTMLInputElement, taskList: HTMLElement, btn: HTMLButtonElement): Promise<void> {
+		const query = input.value.trim();
+		if (!query) return;
+		input.value = '';
+		btn.disabled = true;
+		btn.setText('研究中…');
+
+		try {
+			const taskId = await this.researchService.submit(query, createRequestContext('user'));
+			/* 等待任务完成 */
+			await new Promise((resolve) => setTimeout(resolve, 3000));
+			await this.loadResearchTasks(taskList);
+		} catch (error) {
+			new Notice(`研究失败：${this.getErrorMessage(error)}`);
+		} finally {
+			btn.disabled = false;
+			btn.setText('开始研究');
+		}
+	}
+
+	private async loadResearchTasks(taskList: HTMLElement): Promise<void> {
+		taskList.empty();
+		try {
+			const tasks = await this.researchService.list(createRequestContext('user'));
+			if (tasks.length === 0) {
+				taskList.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无研究任务。输入主题开始研究。' });
+				return;
+			}
+			tasks.slice(0, 10).forEach((task) => {
+				const card = taskList.createDiv({ cls: 'agent-dashboard-research-task' });
+				const top = card.createDiv({ cls: 'agent-dashboard-research-task-top' });
+				top.createSpan({ cls: 'agent-dashboard-research-task-query', text: task.query });
+				const statusColors: Record<string, string> = { completed: 'var(--color-green)', running: 'var(--interactive-accent)', failed: 'var(--color-red)', cancelled: 'var(--text-faint)', queued: 'var(--color-orange)' };
+				top.createSpan({ cls: 'agent-dashboard-research-task-status', text: task.status === 'completed' ? '已完成' : task.status === 'running' ? '进行中' : task.status === 'failed' ? '失败' : task.status === 'cancelled' ? '已取消' : '排队中', attr: { style: `color:${statusColors[task.status] ?? 'var(--text-muted)'};` } });
+				if (task.result?.reportPath) {
+					card.createSpan({ cls: 'agent-dashboard-research-task-path', text: `📄 ${task.result.reportPath}` });
+				}
+				if (task.error) {
+					card.createSpan({ cls: 'agent-dashboard-research-task-error', text: `❌ ${task.error}` });
+				}
+			});
+		} catch {
+			taskList.createDiv({ cls: 'agent-dashboard-empty-state', text: '加载研究任务失败。' });
+		}
 	}
 
 	private renderChatPlaceholder(parent: HTMLElement): void {

@@ -1806,6 +1806,69 @@
 	border-radius: 980px;
 }
 
+/* ===== 研究页 ===== */
+.agent-dashboard-research-input-area {
+	display: flex;
+	gap: 8px;
+	margin: 12px 0;
+}
+
+.agent-dashboard-research-tasks {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	margin-top: 12px;
+}
+
+.agent-dashboard-research-task {
+	background: var(--background-primary);
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 12px;
+	padding: 14px 16px;
+	transition: box-shadow 0.15s ease;
+}
+
+.agent-dashboard-research-task:hover {
+	box-shadow: var(--shadow-s);
+}
+
+.agent-dashboard-research-task-top {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+}
+
+.agent-dashboard-research-task-query {
+	font-size: 13px;
+	font-weight: 500;
+	color: var(--text-normal);
+	flex: 1;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.agent-dashboard-research-task-status {
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
+.agent-dashboard-research-task-path {
+	display: block;
+	margin-top: 6px;
+	font-size: 11px;
+	color: var(--interactive-accent);
+}
+
+.agent-dashboard-research-task-error {
+	display: block;
+	margin-top: 6px;
+	font-size: 11px;
+	color: var(--color-red);
+}
+
 /* ===== 对话 ===== */
 .agent-dashboard-chat-messages {
 	display: flex;

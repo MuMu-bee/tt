@@ -13,6 +13,8 @@ import { DashboardService } from './services/dashboardService';
 import { ProjectTracker } from './services/projectTracker';
 import { ProjectReportService } from './services/projectReportService';
 import { VisionService } from './services/visionService';
+import { ResearchService } from './services/researchService';
+import { MemoryPublishService } from './services/memoryPublishService';
 import { CacheStore } from './services/cacheStore';
 import {
 	AgentDashboardView,
@@ -40,25 +42,29 @@ export default class AgentDashboardPlugin extends Plugin {
 		);
 		const projectReport = new ProjectReportService(model);
 		const visionService = new VisionService(this.app, model);
+			const researchService = new ResearchService(this.app);
+			const memoryPublish = new MemoryPublishService(this.app);
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
-			(leaf) => new AgentDashboardView(
-				leaf,
-				dashboardService,
-				actionService,
-				searchService,
-				lifecycle,
-				runtime.proposals,
-				runtime.approvals,
-				runtime.apply,
-				runtime.persistence,
-				runtime.organize,
-				runtime.audit,
-				this.projectTracker,
-				projectReport,
-				visionService,
-			),
+(leaf) => new AgentDashboardView(
+					leaf,
+					dashboardService,
+					actionService,
+					searchService,
+					lifecycle,
+					runtime.proposals,
+					runtime.approvals,
+					runtime.apply,
+					runtime.persistence,
+					runtime.organize,
+					runtime.audit,
+					this.projectTracker,
+					projectReport,
+					visionService,
+					researchService,
+					memoryPublish,
+				),
 		);
 
 		this.setupAutoProjectReport(this.projectTracker, projectReport);
