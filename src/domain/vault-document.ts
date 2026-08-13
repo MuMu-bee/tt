@@ -1,4 +1,5 @@
 import { sha256Hex } from '../utils/sha256.ts';
+import { extractLinks } from './links.ts';
 
 /** Markdown document and its lossless source metadata used by the read-only index. */
 export interface VaultDocument {
@@ -6,6 +7,7 @@ export interface VaultDocument {
 	title: string;
 	frontmatter: Record<string, unknown>;
 	tags: string[];
+	links: string[];
 	body: string;
 	raw: string;
 	raw_hash: string;
@@ -13,21 +15,14 @@ export interface VaultDocument {
 
 /** Parses one Markdown document without mutating or normalizing its source text. */
 export function parseVaultDocument(path: string, raw: string): VaultDocument {
-	const frontmatterResult = parseYamlFrontmatter(raw);
-	const body = frontmatterResult.body;
+	const f = parseYamlFrontmatter(raw);
+	const body = f.body;
 	const titleMatch = /^\s*#\s+(.+?)\s*$/m.exec(body);
 	const basename = path.split('/').pop() ?? path;
 	const title = titleMatch?.[1] ?? basename.replace(/\.md$/iu, '');
-	const tags = extractTags(frontmatterResult.frontmatter, body);
-	return {
-		path,
-		title: title.trim(),
-		frontmatter: frontmatterResult.frontmatter,
-		tags,
-		body,
-		raw,
-		raw_hash: hashRaw(raw),
-	};
+	const tags = extractTags(f.frontmatter, body);
+	const links = extractLinks(body);
+	return { path, title: title.trim(), frontmatter: f.frontmatter, tags, links, body, raw, raw_hash: hashRaw(raw) };
 }
 
 /** Returns a stable SHA-256 digest of the original UTF-8 source bytes. */

@@ -1010,32 +1010,32 @@
 	margin-top: 12px;
 	display: flex;
 	flex-direction: column;
-	gap: 6px;
+	gap: 8px;
 }
 
 .agent-dashboard-knowledge-result {
 	display: block;
 	width: 100%;
 	text-align: left;
-	border: 1px solid transparent;
+	border: 1px solid var(--background-modifier-border);
 	border-radius: 12px;
 	color: var(--text-normal);
-	background: transparent;
-	padding: 10px 12px;
+	background: var(--background-primary);
+	padding: 14px 16px;
 	cursor: pointer;
-	transition: background 150ms ease, border-color 150ms ease;
+	transition: box-shadow 150ms ease, border-color 150ms ease;
 }
 
 .agent-dashboard-knowledge-result:hover {
-	background: var(--background-modifier-hover);
-	border-color: var(--background-modifier-border);
+	border-color: var(--interactive-accent);
+	box-shadow: var(--shadow-s);
 }
 
 .agent-dashboard-knowledge-copy strong {
 	display: block;
-	font-size: 13px;
-	font-weight: 500;
-	margin-bottom: 2px;
+	font-size: 14px;
+	font-weight: 600;
+	margin-bottom: 4px;
 }
 
 .agent-dashboard-knowledge-path {
@@ -1043,13 +1043,25 @@
 	font-size: 11px;
 	font-weight: 500;
 	color: var(--text-muted);
+	margin-bottom: 4px;
 }
 
 .agent-dashboard-knowledge-snippet {
 	display: block;
-	margin-top: 2px;
-	font-size: 11px;
+	font-size: 12px;
+	color: var(--text-muted);
+	line-height: 1.5;
+	margin-bottom: 4px;
+	padding: 6px 8px;
+	background: var(--background-primary-alt);
+	border-radius: 6px;
+}
+
+.agent-dashboard-knowledge-meta {
+	display: block;
+	font-size: 10px;
 	color: var(--text-faint);
+	font-family: var(--font-monospace);
 }
 
 /* ===== 知识星图页 ===== */
