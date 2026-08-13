@@ -2,6 +2,11 @@ import { readFileSync, writeFileSync } from 'fs';
 
 const targetVersion = process.env.npm_package_version;
 
+if (!targetVersion) {
+	console.error('请通过 `npm version <x.y.z>` 运行本脚本（需要 npm_package_version 环境变量）。');
+	process.exit(1);
+}
+
 // read minAppVersion from manifest.json and bump version to target version
 const manifest = JSON.parse(readFileSync('manifest.json', 'utf8'));
 const { minAppVersion } = manifest;

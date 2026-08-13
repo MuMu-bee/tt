@@ -1,4 +1,3 @@
-import { requestUrl } from 'obsidian';
 import type { AgentConfig, ChatMessage, ChatReference } from '../data/dashboardTypes';
 import { VaultContextService } from './vaultContext';
 
@@ -108,10 +107,15 @@ export class ChatService {
 		try {
 			await this.callLLM(apiMessages, assistantMessage);
 		} catch (error) {
-			const errorMsg = error instanceof Error ? error.message : '请求失败';
-			assistantMessage.content = `抱歉，出了点问题：${errorMsg}`;
-			assistantMessage.streaming = false;
-			this.emit({ type: 'error', error: errorMsg });
+			if (isAbortError(error)) {
+				// 用户主动停止：保留已生成的部分内容，不当作错误处理。
+				assistantMessage.content = assistantMessage.content || '（已停止）';
+			} else {
+				const errorMsg = error instanceof Error ? error.message : '请求失败';
+				assistantMessage.content = `抱歉，出了点问题：${errorMsg}`;
+				assistantMessage.streaming = false;
+				this.emit({ type: 'error', error: errorMsg });
+			}
 		}
 
 		assistantMessage.streaming = false;
@@ -147,11 +151,16 @@ export class ChatService {
 
 		const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-		// Try streaming first, fall back to non-streaming
+		// Try streaming first, fall back to non-streaming.
+		// 用户停止或超时导致的 AbortError 不得降级重试：重试会重新发起一个
+		// 无法再被停止的完整请求。
 		try {
 			await this.streamCloudAPI(url, apiMessages, assistantMessage);
-		} catch {
-			// If streaming fails, try non-streaming
+		} catch (error) {
+			if (isAbortError(error)) {
+				throw error;
+			}
+			// If streaming fails for another reason, try non-streaming
 			await this.nonStreamCloudAPI(url, apiMessages, assistantMessage);
 		}
 	}
@@ -223,8 +232,7 @@ export class ChatService {
 		apiMessages: Array<{ role: string; content: string }>,
 		assistantMessage: ChatMessage,
 	): Promise<void> {
-		const response = await requestUrl({
-			url,
+		const response = await fetch(url, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -235,9 +243,14 @@ export class ChatService {
 				messages: apiMessages,
 				max_tokens: 2048,
 			}),
+			signal: this.abortController?.signal,
 		});
 
-		const data = response.json as {
+		if (!response.ok) {
+			throw new Error(`API 返回 ${response.status}`);
+		}
+
+		const data = (await response.json()) as {
 			choices?: Array<{ message?: { content?: string } }>;
 		};
 		const content = data.choices?.[0]?.message?.content;
@@ -343,6 +356,15 @@ export class ChatService {
 	}
 
 	private generateId(): string {
-		return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+		return `msg_${crypto.randomUUID()}`;
 	}
+}
+
+/** Detect fetch/stream aborts (DOMException in Electron, Error in Node). */
+function isAbortError(error: unknown): boolean {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		(error as { name?: unknown }).name === 'AbortError'
+	);
 }

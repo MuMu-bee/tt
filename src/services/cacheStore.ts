@@ -1,7 +1,8 @@
 import { normalizePath, TFile, TFolder, Vault } from 'obsidian';
 import type { CacheEntry } from '../data/dashboardTypes';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 
-const CACHE_ROOT = 'dashboard/cache';
+const CACHE_ROOT = WORKBENCH_DIRS.cacheRoot;
 
 export class CacheStore {
 	constructor(private readonly vault: Vault) {}

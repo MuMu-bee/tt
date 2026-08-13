@@ -1,4 +1,4 @@
-import { App, TFile, Vault } from 'obsidian';
+import { App, TFile } from 'obsidian';
 import type { ChatReference } from '../data/dashboardTypes';
 
 /**
@@ -18,16 +18,14 @@ export class VaultContextService {
 			return [];
 		}
 
-		const files = this.app.vault.getMarkdownFiles();
+		const files = this.app.vault.getMarkdownFiles().filter((file) => !this.isExcluded(file.path));
+		// 并行读取文件内容，避免大库下串行 I/O 拖慢每次对话。
+		const withContent = await Promise.all(
+			files.map(async (file) => ({ file, content: await this.app.vault.cachedRead(file) })),
+		);
 		const scored: Array<{ file: TFile; score: number; snippet: string }> = [];
 
-		for (const file of files) {
-			// Skip system/dashboard files
-			if (this.isExcluded(file.path)) {
-				continue;
-			}
-
-			const content = await this.app.vault.cachedRead(file);
+		for (const { file, content } of withContent) {
 			const score = this.scoreMatch(file.basename, content, keywords);
 
 			if (score > 0) {
@@ -89,7 +87,18 @@ export class VaultContextService {
 			.map((w) => w.trim().toLowerCase())
 			.filter((w) => w.length > 0 && !stopWords.has(w));
 
-		return [...new Set(words)];
+		const keywords = new Set<string>();
+		for (const word of words) {
+			keywords.add(word);
+			// 中文没有空格分词：补充 2-gram，避免整句作为单个子串导致召回不足。
+			if (/[\u4e00-\u9fff]/.test(word) && word.length >= 2) {
+				for (let i = 0; i < word.length - 1; i += 1) {
+					keywords.add(word.slice(i, i + 2));
+				}
+			}
+		}
+
+		return [...keywords];
 	}
 
 	/**

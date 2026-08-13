@@ -150,6 +150,14 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
 	maxContextTokens: 4000,
 };
 
+/** 插件自产目录：统一引用，避免魔法字符串在多个文件中漂移。 */
+export const WORKBENCH_DIRS = {
+	cacheRoot: 'dashboard/cache',
+	daily: 'Daily',
+	reports: 'Reports',
+	inbox: 'Inbox',
+} as const;
+
 export const DASHBOARD_ACTIONS: DashboardAction[] = [
 	{ id: 'new-diary', label: '新建日记', icon: 'notebook-pen' },
 	{ id: 'deep-research', label: '深度研究', icon: 'search-check' },

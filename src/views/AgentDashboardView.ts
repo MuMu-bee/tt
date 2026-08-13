@@ -17,13 +17,21 @@ import { InboxIngestModal } from '../ui/InboxIngestModal';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
 
-const NAV_ITEMS = [
-	{ label: '总览', icon: 'layout-dashboard' as const, target: 'agent-dashboard-overview' },
-	{ label: '知识库', icon: 'library' as const, target: 'agent-dashboard-notes' },
-	{ label: '任务与计划', icon: 'list-checks' as const, target: 'agent-dashboard-tasks' },
-	{ label: 'GitHub', icon: 'github' as const, target: 'agent-dashboard-agents' },
-	{ label: '对话', icon: 'message-square' as const, target: '__chat__' },
-	{ label: '设置', icon: 'settings-2' as const, target: null },
+interface NavItem {
+	label: string;
+	icon: 'layout-dashboard' | 'library' | 'list-checks' | 'github' | 'message-square' | 'settings-2';
+	target: string | null;
+	/** 无 target 时点击展示的提示文案（用于尚未接入的功能入口）。 */
+	hint?: string;
+}
+
+const NAV_ITEMS: NavItem[] = [
+	{ label: '总览', icon: 'layout-dashboard', target: 'agent-dashboard-overview' },
+	{ label: '知识库', icon: 'library', target: 'agent-dashboard-notes' },
+	{ label: '任务与计划', icon: 'list-checks', target: 'agent-dashboard-tasks' },
+	{ label: 'GitHub', icon: 'github', target: 'agent-dashboard-agents' },
+	{ label: '对话', icon: 'message-square', target: null, hint: '对话功能尚未接入，正在开发中。' },
+	{ label: '设置', icon: 'settings-2', target: null },
 ];
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -34,6 +42,9 @@ const STATUS_LABELS: Record<TaskStatus, string> = {
 
 const DAY_IN_MILLISECONDS = 24 * 60 * 60 * 1000;
 const DISPLAY_NAME = 'TT';
+/** 热力图网格：53 周 × 每周 7 天（与 styles.css 布局对应）。 */
+const HEATMAP_WEEKS = 53;
+const HEATMAP_CELLS = HEATMAP_WEEKS * 7;
 
 export class AgentDashboardView extends ItemView {
 	private data: DashboardData | null = null;
@@ -248,6 +259,10 @@ export class AgentDashboardView extends ItemView {
 					this.setFeedback(`已跳转到${item.label}。`);
 					return;
 				}
+				if (item.hint) {
+					this.setFeedback(item.hint);
+					return;
+				}
 				this.setFeedback('插件设置请从 Obsidian 设置中打开。');
 			});
 		});
@@ -452,7 +467,7 @@ export class AgentDashboardView extends ItemView {
 		gridStart.setDate(gridStart.getDate() - offset);
 		const maxCount = Math.max(1, ...Object.values(data.heatmap.counts));
 
-		for (let index = 0; index < 53 * 7; index += 1) {
+		for (let index = 0; index < HEATMAP_CELLS; index += 1) {
 			const date = new Date(gridStart);
 			date.setDate(gridStart.getDate() + index);
 			const inRange = date >= start && date <= end;
@@ -676,7 +691,9 @@ export class AgentDashboardView extends ItemView {
 				case 'vault-lint':
 					path = await this.actionService.runVaultLint();
 					break;
-			}
+				default:
+					throw new Error(`未知操作：${action.id}`);
+				}
 
 			const completionMessage = path ? `${action.label} 已完成：${path}` : `${action.label} 已完成。`;
 			const refreshed = await this.refresh();

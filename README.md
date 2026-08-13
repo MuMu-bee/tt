@@ -1,92 +1,51 @@
-# Obsidian Sample Plugin
+# Agent Dashboard（智能体工作台 / 墨忆台）
 
-This is a sample plugin for Obsidian (https://obsidian.md).
+一个运行在 Obsidian 内的智能体工作台插件。它提供个人工作概览、信息流聚合、Vault 健康检查、AI 对话（墨忆台）等能力，是「墨忆台（Memory Workbench）」产品的基础外壳与 Dashboard 实现。
 
-This project uses TypeScript to provide type checking and documentation.
-The repo depends on the latest plugin API (obsidian.d.ts) in TypeScript Definition format, which contains TSDoc comments describing what it does.
+> 产品设计与路线图见 [`docs/inkmemory/`](docs/inkmemory/)：PDR、ROADMAP、技术设计与迁移计划。
 
-This sample plugin demonstrates some of the basic functionality the plugin API can do.
+## 功能特性
 
-- Adds a ribbon icon, which shows a Notice when clicked.
-- Adds a command "Open modal (simple)" which opens a Modal.
-- Adds a plugin setting tab to the settings page.
-- Registers a global click event and outputs a Notice on click.
-- Registers a global interval which logs 'setInterval' to the console.
+- **总览 Dashboard**：Vault 健康分、Inbox 待处理、任务流、笔记创建活跃度热力图（近 12 个月）。
+- **快捷操作**：新建日记、深度研究、拉取 RSS 摘要、GitHub 动态精选、收件箱导入、Vault 检查（lint）。
+- **信息流聚合**：GitHub AI Agent 仓库、RSS、HackerNews，带 1 小时本地缓存。
+- **Vault 扫描**：frontmatter / 标签覆盖率、孤立笔记、30 天未修改提醒、今日任务。
+- **墨忆台对话（开发中）**：基于 Vault 上下文注入的本地 / 云端 LLM 对话，支持流式输出。
 
-## First time developing plugins?
+## 安装
 
-Quick starting guide for new plugin devs:
+1. 下载最新的 [Release](https://github.com/MuMu-bee/tt/releases) 中的 `main.js`、`manifest.json`、`styles.css`。
+2. 放入 Vault 的 `.obsidian/plugins/agent-dashboard/` 目录。
+3. 在 Obsidian「设置 → 第三方插件」中启用「Agent Dashboard」。
 
-- Check if [someone already developed a plugin for what you want](https://obsidian.md/plugins)! There might be an existing plugin similar enough that you can partner up with.
-- Make a copy of this repo as a template with the "Use this template" button (login to GitHub if you don't see it).
-- Clone your repo to a local development folder. For convenience, you can place this folder in your `.obsidian/plugins/your-plugin-name` folder.
-- Install NodeJS, then run `npm i` in the command line under your repo folder.
-- Run `npm run dev` to compile your plugin from `src/main.ts` to `main.js`.
-- Make changes to `src/main.ts` (or create new `.ts` files). Those changes should be automatically compiled into `main.js`.
-- Reload Obsidian to load the new version of your plugin.
-- Enable plugin in settings window.
-- For updates to the Obsidian API run `npm update` in the command line under your repo folder.
+## 开发
 
-## Releasing new releases
+要求 Node.js ≥ 22.6（测试脚本依赖 `--experimental-strip-types`）。
 
-- Update your `manifest.json` with your new version number, such as `1.0.1`, and the minimum Obsidian version required for your latest release.
-- Update your `versions.json` file with `"new-plugin-version": "minimum-obsidian-version"` so older versions of Obsidian can download an older version of your plugin that's compatible.
-- Create new GitHub release using your new version number as the "Tag version". Use the exact version number, don't include a prefix `v`. See here for an example: https://github.com/obsidianmd/obsidian-sample-plugin/releases
-- Upload the files `manifest.json`, `main.js`, `styles.css` as binary attachments. Note: The manifest.json file must be in two places, first the root path of your repository and also in the release.
-- Publish the release.
-
-> You can simplify the version bump process by running `npm version patch`, `npm version minor` or `npm version major` after updating `minAppVersion` manually in `manifest.json`.
-> The command will bump version in `manifest.json` and `package.json`, and add the entry for the new version to `versions.json`
-
-## Adding your plugin to the community plugin list
-
-- Check the [plugin guidelines](https://docs.obsidian.md/Plugins/Releasing/Plugin+guidelines).
-- Publish an initial version.
-- Make sure you have a `README.md` file in the root of your repo.
-- Make a pull request at https://github.com/obsidianmd/obsidian-releases to add your plugin.
-
-## How to use
-
-- Clone this repo.
-- Make sure your NodeJS is at least v18 (`node --version`).
-- `npm i` to install dependencies.
-- `npm run dev` to start compilation in watch mode.
-
-## Manually installing the plugin
-
-- Copy over `main.js`, `styles.css`, `manifest.json` to your vault `VaultFolder/.obsidian/plugins/your-plugin-id/`.
-
-## Improve code quality with eslint
-
-- [ESLint](https://eslint.org/) is a tool that analyzes your code to quickly find problems. You can run ESLint against your plugin to find common bugs and ways to improve your code.
-- This project already has eslint preconfigured, you can invoke a check by running`npm run lint`
-- Together with a custom eslint [plugin](https://github.com/obsidianmd/eslint-plugin) for Obsidan specific code guidelines.
-- A GitHub action is preconfigured to automatically lint every commit on all branches.
-
-## Funding URL
-
-You can include funding URLs where people who use your plugin can financially support it.
-
-The simple way is to set the `fundingUrl` field to your link in your `manifest.json` file:
-
-```json
-{
-	"fundingUrl": "https://buymeacoffee.com"
-}
+```bash
+npm install
+npm run dev        # 监听模式编译
+npm run build      # 类型检查 + 生产构建
+npm test           # 运行测试
+npm run lint       # ESLint
 ```
 
-If you have multiple URLs, you can also do:
+## 设置
 
-```json
-{
-	"fundingUrl": {
-		"Buy Me a Coffee": "https://buymeacoffee.com",
-		"GitHub Sponsor": "https://github.com/sponsors",
-		"Patreon": "https://www.patreon.com/"
-	}
-}
+- **智能体命令**：Hermes 命令路径（桌面端深度研究 / 摘要使用）。
+- **墨忆台 · 模型设置**：本地 Ollama 或云端 OpenAI 兼容 API（模型、地址、密钥）。
+  - 注意：云端 API 密钥以明文保存在插件数据文件（`.obsidian/plugins/agent-dashboard/data.json`）中，请勿在共享设备上使用。
+
+## 项目结构
+
 ```
-
-## API Documentation
-
-See https://docs.obsidian.md
+src/
+├── main.ts                      # 插件入口
+├── settings.ts                  # 设置页
+├── data/dashboardTypes.ts       # 类型与常量
+├── services/                    # 业务服务（扫描、信息流、对话、缓存、Vault 上下文）
+├── ui/                          # 弹窗组件
+└── views/AgentDashboardView.ts  # Dashboard 视图
+docs/inkmemory/                  # 墨忆台产品与设计文档
+tests/                           # 单元测试（node:test）
+```

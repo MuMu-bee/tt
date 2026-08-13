@@ -76,7 +76,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('云端 API Key')
-			.setDesc('云端 LLM 的 API 密钥。')
+			.setDesc(`云端 LLM 的 API 密钥。注意：密钥以明文保存在插件数据文件（${this.app.vault.configDir}/plugins/agent-dashboard/data.json）中，请勿在共享设备上使用。`)
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text

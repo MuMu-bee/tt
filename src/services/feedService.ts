@@ -9,6 +9,7 @@ import { isCacheFresh } from './dashboardMath';
 import { parseRssXml } from './rssParser';
 
 const CACHE_MAX_AGE = 60 * 60 * 1000;
+// 未认证的 GitHub Search API 限流约 10 次/分钟；限流触发时由 loadCached 记录错误并回退缓存。
 const GITHUB_SEARCH_URL = 'https://api.github.com/search/repositories?q=AI%20agent&sort=updated&order=desc&per_page=5';
 const RSS_URL = 'https://hnrss.org/newest';
 const HN_TOP_STORIES_URL = 'https://hacker-news.firebaseio.com/v0/topstories.json';
@@ -89,7 +90,12 @@ export class FeedService {
 			const data = await loader();
 			await this.cache.write(name, data);
 			return data;
-		} catch {
+		} catch (error) {
+			// 抓取失败不再静默吞掉：记录日志便于排查（限流、网络、上游故障等）。
+			console.error(
+				`[agent-dashboard] 信息流「${name}」抓取失败，已回退到缓存或空数据。`,
+				error,
+			);
 			return cached?.data ?? empty;
 		}
 	}

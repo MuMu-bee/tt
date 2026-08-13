@@ -27,3 +27,6 @@ prototype/
 docs/superpowers/
 AGENTS.md
 CLAUDE.md
+
+# 本地安全扫描产物
+.mimosa/

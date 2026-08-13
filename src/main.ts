@@ -1,4 +1,5 @@
 import { MarkdownView, Plugin } from 'obsidian';
+import type { TAbstractFile } from 'obsidian';
 import {
 	AgentDashboardSettingTab,
 	DEFAULT_SETTINGS,
@@ -29,9 +30,9 @@ export default class AgentDashboardPlugin extends Plugin {
 			(leaf) => new AgentDashboardView(leaf, dashboardService, actionService),
 		);
 
-		this.registerEvent(this.app.vault.on('create', () => this.refreshDashboardViews()));
-		this.registerEvent(this.app.vault.on('modify', () => this.refreshDashboardViews()));
-		this.registerEvent(this.app.vault.on('delete', () => this.refreshDashboardViews()));
+		this.registerEvent(this.app.vault.on('create', (file) => this.handleVaultEvent(file)));
+		this.registerEvent(this.app.vault.on('modify', (file) => this.handleVaultEvent(file)));
+		this.registerEvent(this.app.vault.on('delete', (file) => this.handleVaultEvent(file)));
 
 		const ribbonIcon = this.addRibbonIcon(
 			'layout-dashboard',
@@ -121,5 +122,16 @@ export default class AgentDashboardPlugin extends Plugin {
 			}
 			leaf.view.scheduleRefresh();
 		});
+	}
+
+	/**
+	 * 过滤插件自身缓存目录（dashboard/），避免缓存写入触发无限刷新循环。
+	 * Daily/Reports/Inbox 等用户可见目录的变更仍会正常触发刷新。
+	 */
+	private handleVaultEvent(file: TAbstractFile): void {
+		if (file.path.startsWith('dashboard/')) {
+			return;
+		}
+		this.refreshDashboardViews();
 	}
 }

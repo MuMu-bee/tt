@@ -3,9 +3,15 @@ import type {
 	GitHubFeedItem,
 	RssFeedItem,
 } from '../data/dashboardTypes';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 import { toDateKey } from './dashboardMath';
 import { CacheStore } from './cacheStore';
 import { DashboardService } from './dashboardService';
+
+/** hermes 子进程超时时间，防止挂死导致 promise 永不结束。 */
+const HERMES_TIMEOUT_MS = 5 * 60 * 1000;
+/** hermes 输出上限（字符），防止无界累积占用内存。 */
+const HERMES_MAX_OUTPUT = 10 * 1024 * 1024;
 
 export class AgentActionService {
 	private readonly writer: CacheStore;
@@ -20,8 +26,8 @@ export class AgentActionService {
 
 	async createDiary(): Promise<string> {
 		const date = toDateKey(new Date());
-		await this.writer.ensureFolder('Daily');
-		const path = normalizePath(`Daily/${date}.md`);
+		await this.writer.ensureFolder(WORKBENCH_DIRS.daily);
+		const path = normalizePath(`${WORKBENCH_DIRS.daily}/${date}.md`);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) {
 			return path;
@@ -30,11 +36,14 @@ export class AgentActionService {
 		return path;
 	}
 
-	async runDeepResearch(): Promise<string> {
+	/**
+	 * @param prompt 研究主题；默认研究 AI Agent 资讯（与旧行为一致）。
+	 */
+	async runDeepResearch(
+		prompt = '研究今天的 AI Agent 资讯，输出 Markdown 报告',
+	): Promise<string> {
 		const date = toDateKey(new Date());
-		const report = await this.runHermes(
-			'研究今天的 AI Agent 资讯，输出 Markdown 报告',
-		);
+		const report = await this.runHermes(prompt);
 		return this.writeReport(`deep-research-${date}.md`, report);
 	}
 
@@ -56,7 +65,7 @@ export class AgentActionService {
 			throw new Error('请输入要导入 Inbox 的内容。');
 		}
 
-		await this.writer.ensureFolder('Inbox');
+		await this.writer.ensureFolder(WORKBENCH_DIRS.inbox);
 		const now = new Date();
 		const timestamp = [
 			String(now.getFullYear()),
@@ -68,8 +77,11 @@ export class AgentActionService {
 			String(now.getSeconds()).padStart(2, '0'),
 		].join('');
 		const title = this.sanitizeTitle(trimmed.split(/\r?\n/)[0] ?? 'inbox-note');
-		const path = normalizePath(`Inbox/${timestamp}-${title || 'inbox-note'}.md`);
-		await this.writer.writeText(path, `---\ncreated: ${now.toISOString()}\ntags:\n  - inbox\n---\n\n${trimmed}\n`);
+		const path = normalizePath(`${WORKBENCH_DIRS.inbox}/${timestamp}-${title || 'inbox-note'}.md`);
+		// 正文在 frontmatter 闭合后写入：Obsidian 只解析文件开头的 YAML 块，
+		// 正文中的 `---` 不会注入元数据；这里仅统一换行符，避免 \r 干扰解析。
+		const body = trimmed.replace(/\r\n/g, '\n');
+		await this.writer.writeText(path, `---\ncreated: ${now.toISOString()}\ntags:\n  - inbox\n---\n\n${body}\n`);
 		return path;
 	}
 
@@ -103,13 +115,24 @@ export class AgentActionService {
 			const child = spawn(command, ['-p', prompt], { windowsHide: true });
 			let stdout = '';
 			let stderr = '';
+			// 超时保护：hermes 挂死时终止进程并结束 promise，避免 UI 操作被永久锁死。
+			const timer = setTimeout(() => {
+				child.kill();
+				reject(new Error(`hermes 执行超时（${HERMES_TIMEOUT_MS / 1000}s），已终止。`));
+			}, HERMES_TIMEOUT_MS);
 			child.stdout?.on('data', (chunk: Uint8Array | string) => {
 				stdout += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
+				if (stdout.length > HERMES_MAX_OUTPUT) {
+					clearTimeout(timer);
+					child.kill();
+					reject(new Error(`hermes 输出超过 ${HERMES_MAX_OUTPUT} 字符，已终止。`));
+				}
 			});
 			child.stderr?.on('data', (chunk: Uint8Array | string) => {
 				stderr += typeof chunk === 'string' ? chunk : new TextDecoder().decode(chunk);
 			});
 			child.once('error', (error: Error & { code?: string }) => {
+				clearTimeout(timer);
 				if (error.code === 'ENOENT') {
 					reject(new Error('找不到 hermes，请在插件设置中配置 hermes 命令路径。'));
 					return;
@@ -117,6 +140,7 @@ export class AgentActionService {
 				reject(error);
 			});
 			child.once('close', (code) => {
+				clearTimeout(timer);
 				if (code === 0) {
 					resolve(stdout.trim());
 					return;
@@ -127,8 +151,8 @@ export class AgentActionService {
 	}
 
 	private async writeReport(fileName: string, content: string): Promise<string> {
-		await this.writer.ensureFolder('Reports');
-		const path = normalizePath(`Reports/${fileName}`);
+		await this.writer.ensureFolder(WORKBENCH_DIRS.reports);
+		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 		await this.writer.writeText(path, content.endsWith('\n') ? content : `${content}\n`);
 		return path;
 	}

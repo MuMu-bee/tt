@@ -13,7 +13,6 @@ export default defineConfig(
 		'package.json',
 		'package-lock.json',
 		'tsconfig.json',
-		'prototype/simple-dashboard/**',
 		'tests/**',
 	]),
 	{
