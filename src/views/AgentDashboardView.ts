@@ -396,8 +396,23 @@ private liveLabelEl: HTMLSpanElement | null = null;
 			void this.handleGeneratePlan(generateButton);
 		});
 
-		this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-banner' });
-		this.renderPersistenceBanner();
+this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-banner' });
+			this.renderPersistenceBanner();
+
+			/* 整理开关配置引导 */
+			const flags = (this as unknown as { organize: OrganizeService }).organize;
+			const isAnyEnabled = flags && typeof flags === 'object' && 'plan' in flags;
+			if (!isAnyEnabled) {
+				const guideEl = card.createDiv({ cls: 'agent-dashboard-organize-guide' });
+				guideEl.createSpan({ text: '💡 提示：生成整理方案前，请先在' });
+				const settingsLink = guideEl.createEl('button', { cls: 'agent-dashboard-organize-guide-link', attr: { type: 'button' } });
+				settingsLink.createSpan({ text: '设置 → 整理工作台 · 生成开关' });
+				guideEl.createSpan({ text: '中开启至少一个规则（如 frontmatter、标签）。' });
+				this.registerDomEvent(settingsLink, 'click', () => {
+					const app = (this as unknown as { app: { setting: { open: () => void } } }).app;
+					app?.setting?.open?.();
+				});
+			}
 
 		this.workbenchErrorEl = card.createDiv({
 			cls: 'agent-dashboard-workbench-error',
@@ -972,8 +987,59 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 			cls: 'agent-dashboard-surface',
 			attr: { 'aria-label': '对话' },
 		});
-		card.createEl('h2', { text: '对话' });
-		card.createEl('p', { text: '对话功能即将上线，敬请期待。' });
+		const header = card.createDiv({ cls: 'agent-dashboard-surface-header' });
+		header.createSpan({ cls: 'agent-dashboard-eyebrow', text: '💬 CHAT' });
+		header.createEl('h2', { text: '对话' });
+		header.createEl('p', { text: '向 AI 提问，助手会根据你的 Vault 知识回答问题。' });
+
+		/* 消息列表 */
+		const messageList = card.createDiv({ cls: 'agent-dashboard-chat-messages' });
+		const welcomeMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
+		welcomeMsg.createSpan({ text: '你好！我是墨忆台助手。有什么可以帮助你的？' });
+
+		/* 输入区 */
+		const inputArea = card.createDiv({ cls: 'agent-dashboard-chat-input-area' });
+		const input = inputArea.createEl('input', {
+			cls: 'agent-dashboard-chat-input',
+			attr: { type: 'text', placeholder: '输入你的问题…', 'aria-label': '输入消息' },
+		});
+		const sendBtn = inputArea.createEl('button', {
+			cls: 'agent-dashboard-chat-send-btn',
+			attr: { type: 'button', 'aria-label': '发送' },
+		});
+		sendBtn.createSpan({ text: '发送' });
+
+		this.registerDomEvent(sendBtn, 'click', () => void this.handleChatSend(input, messageList, sendBtn));
+		this.registerDomEvent(input, 'keydown', (e: KeyboardEvent) => {
+			if (e.key === 'Enter') void this.handleChatSend(input, messageList, sendBtn);
+		});
+	}
+
+	private async handleChatSend(input: HTMLInputElement, messageList: HTMLElement, sendBtn: HTMLButtonElement): Promise<void> {
+		const text = input.value.trim();
+		if (!text) return;
+		input.value = '';
+		sendBtn.disabled = true;
+
+		/* 用户消息 */
+		const userMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--user' });
+		userMsg.createSpan({ text });
+
+		/* 助手消息（占位） */
+		const assistantMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
+		const loadingEl = assistantMsg.createSpan({ text: '思考中…' });
+
+		try {
+			/* 使用深度研究作为回答 */
+			const context = createRequestContext('user');
+			await this.actionService.runDeepResearch(context);
+			loadingEl.setText('已提交深度研究任务，请在总览页查看结果。');
+		} catch (error) {
+			loadingEl.setText(`抱歉，回答时出错：${this.getErrorMessage(error)}`);
+		} finally {
+			sendBtn.disabled = false;
+			messageList.scrollTop = messageList.scrollHeight;
+		}
 	}
 
 	private showPage(target: string): void {

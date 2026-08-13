@@ -1806,22 +1806,112 @@
 	border-radius: 980px;
 }
 
-/* ===== 对话占位 ===== */
-.agent-dashboard-chat-placeholder {
-	text-align: center;
-	padding: 60px 20px;
-	color: var(--text-faint);
+/* ===== 对话 ===== */
+.agent-dashboard-chat-messages {
+	display: flex;
+	flex-direction: column;
+	gap: 10px;
+	margin: 12px 0;
+	max-height: 400px;
+	overflow-y: auto;
+	padding: 4px;
 }
 
-.agent-dashboard-chat-placeholder h2 {
-	font-size: 20px;
-	font-weight: 600;
-	margin-bottom: 8px;
-	color: var(--text-normal);
-}
-
-.agent-dashboard-chat-placeholder p {
+.agent-dashboard-chat-message {
+	max-width: 85%;
+	padding: 10px 14px;
+	border-radius: 12px;
 	font-size: 13px;
+	line-height: 1.5;
+	animation: agent-dashboard-fadeIn 0.2s ease;
+}
+
+.agent-dashboard-chat-message--user {
+	align-self: flex-end;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	border-bottom-right-radius: 4px;
+}
+
+.agent-dashboard-chat-message--assistant {
+	align-self: flex-start;
+	background: var(--background-primary-alt);
+	color: var(--text-normal);
+	border-bottom-left-radius: 4px;
+}
+
+.agent-dashboard-chat-input-area {
+	display: flex;
+	gap: 8px;
+	margin-top: 8px;
+}
+
+.agent-dashboard-chat-input {
+	flex: 1;
+	padding: 10px 14px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 980px;
+	background: var(--background-primary-alt);
+	color: var(--text-normal);
+	font: inherit;
+	font-size: 13px;
+	outline: none;
+}
+
+.agent-dashboard-chat-input:focus {
+	border-color: var(--interactive-accent);
+}
+
+.agent-dashboard-chat-send-btn {
+	appearance: none;
+	border: none;
+	cursor: pointer;
+	background: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font: inherit;
+	font-size: 13px;
+	font-weight: 500;
+	padding: 10px 20px;
+	border-radius: 980px;
+	transition: filter 0.15s ease;
+	white-space: nowrap;
+}
+
+.agent-dashboard-chat-send-btn:hover {
+	filter: brightness(1.1);
+}
+
+.agent-dashboard-chat-send-btn:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+/* ===== 整理方案配置引导 ===== */
+.agent-dashboard-organize-guide {
+	display: flex;
+	align-items: center;
+	gap: 4px;
+	flex-wrap: wrap;
+	margin: 4px 0 10px;
+	padding: 10px 14px;
+	border-radius: 12px;
+	background: var(--background-modifier-hover);
+	font-size: 12px;
+	color: var(--text-muted);
+}
+
+.agent-dashboard-organize-guide-link {
+	appearance: none;
+	border: none;
+	cursor: pointer;
+	background: transparent;
+	color: var(--interactive-accent);
+	font: inherit;
+	font-size: 12px;
+	font-weight: 600;
+	padding: 0;
+	text-decoration: underline;
+	text-underline-offset: 2px;
 }
 
 /* ===== 加载 / 错误 ===== */
