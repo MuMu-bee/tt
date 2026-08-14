@@ -10,6 +10,8 @@ import { isMarkdownPath } from './services/indexLifecycleService';
 import { composeRuntime } from './services/runtimeComposition';
 import { createRequestContext } from './application/requestContext';
 import { AgentActionService } from './services/agentActionService';
+import { ChatService } from './services/chatService';
+import { VaultContextService } from './services/vaultContext';
 import { DashboardService } from './services/dashboardService';
 import { ProjectTracker } from './services/projectTracker';
 import { ProjectReportService } from './services/projectReportService';
@@ -43,6 +45,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		void lifecycle.rebuild(createRequestContext('background-task')).catch(() => undefined);
 		const model = new OpenAiModel(this.settings.agent);
 		const actionService = new AgentActionService(this.app, dashboardService, model);
+		const chatService = new ChatService(this.settings.agent, new VaultContextService(this.app, searchService));
 		this.projectTracker = new ProjectTracker(
 			new CacheStore(this.app.vault),
 			this.settings.projectTracker.githubToken,
@@ -93,6 +96,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				researchService,
 				memoryPublish,
 				patrolService,
+				chatService,
 			),
 		);
 

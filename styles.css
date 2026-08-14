@@ -1095,6 +1095,18 @@
 	display: block;
 }
 
+.agent-dashboard-graph-empty {
+	position: absolute;
+	inset: 0;
+	display: grid;
+	place-items: center;
+	padding: 32px;
+	color: var(--text-muted);
+	font-size: 13px;
+	text-align: center;
+	pointer-events: none;
+}
+
 .agent-dashboard-graph-search {
 	position: absolute;
 	top: 16px;

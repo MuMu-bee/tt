@@ -9,6 +9,7 @@ import type {
 } from '../data/dashboardTypes';
 import { DASHBOARD_ACTIONS, WORKBENCH_DIRS } from '../data/dashboardTypes';
 import { AgentActionService, showActionError } from '../services/agentActionService';
+import { ChatService } from '../services/chatService';
 import { DashboardService } from '../services/dashboardService';
 import { ProjectTracker } from '../services/projectTracker';
 import { ProjectReportService } from '../services/projectReportService';
@@ -41,6 +42,17 @@ import {
 } from './proposalViewState';
 
 export const VIEW_TYPE_AGENT_DASHBOARD = 'agent-dashboard-view';
+
+/** 每日热点条目。 */
+interface HotItem {
+	rank: number;
+	title: string;
+	desc: string;
+	category: string;
+	source: string;
+	heat: string;
+	detail: string;
+}
 
 /** Read-only audit query surface injected by the runtime. */
 export interface AuditQueryPort {
@@ -111,6 +123,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 		private readonly researchService: ResearchService;
 		private readonly memoryPublish: MemoryPublishService;
 		private readonly patrolService: PatrolService;
+		private readonly chatService?: ChatService;
 
 	private workbenchStatusEl: HTMLElement | null = null;
 	private projectListEl: HTMLElement | null = null;
@@ -122,6 +135,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private auditListEl: HTMLElement | null = null;
 	private workbenchToken = 0;
 	private organizeBusy = false;
+	private chatMessagesEl: HTMLElement | null = null;
 
 constructor(
 			leaf: WorkspaceLeaf,
@@ -141,6 +155,7 @@ constructor(
 			researchService: ResearchService,
 			memoryPublish: MemoryPublishService,
 			patrolService: PatrolService,
+			chatService?: ChatService,
 		) {
 			super(leaf);
 			this.dashboard = dashboard;
@@ -159,6 +174,7 @@ constructor(
 			this.researchService = researchService;
 			this.memoryPublish = memoryPublish;
 			this.patrolService = patrolService;
+			this.chatService = chatService;
 		}
 
 	getViewType(): string {
@@ -340,7 +356,7 @@ this.renderWelcome(overviewPage, data);
 			/* ===== 对话页（占位） ===== */
 			const chatPage = content.createDiv({ cls: 'agent-dashboard-page' });
 			this.pageMap['agent-dashboard-chat'] = chatPage;
-			this.renderChatPlaceholder(chatPage);
+			this.renderChatPage(chatPage);
 
 		this.showPage(this.activePage);
 	}
@@ -386,7 +402,7 @@ this.renderWelcome(overviewPage, data);
 		const copy = row.createDiv({ cls: 'agent-dashboard-knowledge-copy' });
 		copy.createEl('strong', { text: result.title });
 		copy.createSpan({ cls: 'agent-dashboard-knowledge-path', text: result.path });
-		copy.createSpan({ cls: 'agent-dashboard-knowledge-snippet', text: result.snippet });
+		copy.createSpan({ cls: 'agent-dashboard-knowledge-snippet', text: result.snippet?.trim() || '（无匹配片段）' });
 		const rawHash = typeof result.metadata?.raw_hash === 'string' ? result.metadata.raw_hash : undefined;
 		const sourceLabels: Record<string, string> = { keyword: '关键词', semantic: '语义', hybrid: '混合' };
 		const sourceLabel = sourceLabels[result.source] ?? result.source;
@@ -914,7 +930,7 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		const headerText = header.createDiv();
 		headerText.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
 		headerText.createEl('h1', { text: '知识星图' });
-		headerText.createEl('p', { text: '图谱可视化渲染开发中：当前展示笔记间真实链接的统计数据。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		headerText.createEl('p', { text: '基于笔记间真实 [[双向链接]] 的力导向图：拖拽移动节点，点击节点打开笔记，搜索框可定位节点。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
 		header.createSpan({ text: `LIVE VAULT · ${new Date().toISOString().slice(0, 10)}`, cls: 'agent-dashboard-graph-header__meta', attr: { style: 'font-size:12px;color:var(--text-muted);font-family:var(--font-monospace);' } });
 
 		const container = shell.createDiv({ cls: 'agent-dashboard-graph-container' });
@@ -922,15 +938,14 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		/* 搜索框 */
 		const search = container.createDiv({ cls: 'agent-dashboard-graph-search' });
 		search.createSpan({ text: '🔍' });
-		search.createEl('input', { attr: { type: 'search', placeholder: `搜索 ${nodeCount} 个知识页…`, 'aria-label': '搜索图谱节点' } });
+		const searchInput = search.createEl('input', { attr: { type: 'search', placeholder: `搜索 ${nodeCount} 个知识页…`, 'aria-label': '搜索图谱节点' } });
 		search.createEl('kbd', { text: '/' });
 
-		/* Canvas 渲染尚未实现：显示占位文案，隐藏空 canvas */
-		const canvasWrap = container.createDiv({ cls: 'agent-dashboard-graph-canvas-wrap' });
-		canvasWrap.createDiv({ cls: 'agent-dashboard-empty-state', text: '图谱可视化渲染开发中，当前仅提供链接统计。' });
-		const canvas = canvasWrap.createEl('canvas', { attr: { height: '500' } });
+		const canvas = container.createEl('canvas');
 		canvas.id = 'agent-dashboard-graph-canvas';
-		canvas.hidden = true;
+
+		const emptyHint = container.createDiv({ cls: 'agent-dashboard-graph-empty', text: '暂无图谱数据：创建带 [[双向链接]] 的笔记后，这里会展示笔记间的关联网络。' });
+		emptyHint.hidden = graphData.nodes.length > 0;
 
 		/* 底部统计 */
 		const stats = container.createDiv({ cls: 'agent-dashboard-graph-stats' });
@@ -960,6 +975,231 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 			item.createSpan({ text: typeLabels[type] ?? type });
 			item.createSpan({ cls: 'agent-dashboard-graph-lens__count', text: String(count) });
 		});
+
+		this.renderGraphCanvas(canvas, graphData.nodes, graphData.edges, searchInput, emptyHint);
+	}
+
+	/** 渲染力导向图：斥力 + 弹簧力布局，支持拖拽、悬停高亮、点击打开、搜索定位。 */
+	private renderGraphCanvas(
+		canvas: HTMLCanvasElement,
+		nodes: Array<{ id: string; title: string; type: string; degree: number }>,
+		edges: Array<{ source: string; target: string }>,
+		searchInput: HTMLInputElement,
+		emptyHint: HTMLElement,
+	): void {
+		const container = canvas.parentElement;
+		if (!container) return;
+		const ctx = canvas.getContext('2d');
+		if (!ctx) return;
+
+		const typeColors: Record<string, string> = {
+			wiki: '#8b5cf6',
+			raw: '#10b981',
+			inbox: '#f59e0b',
+			note: '#3b82f6',
+		};
+
+		const positions = new Map<string, { x: number; y: number; vx: number; vy: number; r: number }>();
+		const width = (): number => container.clientWidth;
+		const height = (): number => container.clientHeight;
+		const area = nodes.length > 0 ? Math.sqrt((width() * height()) / nodes.length) : 80;
+
+		nodes.forEach((node, index) => {
+			const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
+			const radius = Math.min(width(), height()) * 0.35 * (0.6 + 0.4 * Math.random());
+			positions.set(node.id, {
+				x: width() / 2 + Math.cos(angle) * radius,
+				y: height() / 2 + Math.sin(angle) * radius,
+				vx: 0,
+				vy: 0,
+				r: Math.max(5, Math.min(16, 6 + Math.sqrt(node.degree) * 2)),
+			});
+		});
+
+		const DPR = window.devicePixelRatio || 1;
+		const resize = (): void => {
+			canvas.width = Math.max(1, Math.floor(width() * DPR));
+			canvas.height = Math.max(1, Math.floor(height() * DPR));
+			ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+		};
+		resize();
+
+		let dragId: string | null = null;
+		let hoverId: string | null = null;
+		let animationFrame = 0;
+		let running = true;
+
+		const nodeAt = (mx: number, my: number): string | null => {
+			let best: string | null = null;
+			let bestDist = 30;
+			positions.forEach((pos, id) => {
+				const d = Math.hypot(mx - pos.x, my - pos.y);
+				if (d < bestDist) { bestDist = d; best = id; }
+			});
+			return best;
+		};
+
+		const step = (): void => {
+			const valid: Array<{ id: string; pos: { x: number; y: number; vx: number; vy: number; r: number } }> = [];
+			positions.forEach((pos, id) => valid.push({ id, pos }));
+			const spring = 120;
+			/* 弹簧力（沿边） */
+			for (const edge of edges) {
+				const a = positions.get(edge.source);
+				const b = positions.get(edge.target);
+				if (!a || !b || a === b) continue;
+				const dx = b.x - a.x;
+				const dy = b.y - a.y;
+				const dist = Math.max(1, Math.hypot(dx, dy));
+				const force = (dist - spring) * 0.02;
+				const fx = (dx / dist) * force;
+				const fy = (dy / dist) * force;
+				if (dragId !== edge.source) { a.vx += fx; a.vy += fy; }
+				if (dragId !== edge.target) { b.vx -= fx; b.vy -= fy; }
+			}
+			/* 斥力（所有节点对） */
+			for (let i = 0; i < valid.length; i += 1) {
+				for (let j = i + 1; j < valid.length; j += 1) {
+					const a = valid[i]?.pos;
+					const b = valid[j]?.pos;
+					if (!a || !b) continue;
+					const dx = b.x - a.x;
+					const dy = b.y - a.y;
+					const dist = Math.max(1, Math.hypot(dx, dy));
+					const force = Math.min(600, (area * area) / (dist * dist)) * 0.5;
+					const fx = (dx / dist) * force;
+					const fy = (dy / dist) * force;
+					if (dragId !== valid[i]?.id) { a.vx -= fx; a.vy -= fy; }
+					if (dragId !== valid[j]?.id) { b.vx += fx; b.vy += fy; }
+				}
+			}
+			for (const item of valid) {
+				item.pos.vx *= 0.85;
+				item.pos.vy *= 0.85;
+				item.pos.vx += (width() / 2 - item.pos.x) * 0.001;
+				item.pos.vy += (height() / 2 - item.pos.y) * 0.001;
+				if (dragId !== item.id) {
+					item.pos.x += item.pos.vx;
+					item.pos.y += item.pos.vy;
+				}
+				item.pos.x = Math.max(10, Math.min(width() - 10, item.pos.x));
+				item.pos.y = Math.max(10, Math.min(height() - 10, item.pos.y));
+			}
+		};
+
+		const draw = (): void => {
+			ctx.clearRect(0, 0, width(), height());
+			ctx.lineWidth = 1;
+			ctx.strokeStyle = 'rgba(128,128,128,0.25)';
+			for (const edge of edges) {
+				const a = positions.get(edge.source);
+				const b = positions.get(edge.target);
+				if (!a || !b) continue;
+				ctx.beginPath();
+				ctx.moveTo(a.x, a.y);
+				ctx.lineTo(b.x, b.y);
+				ctx.stroke();
+			}
+			for (const node of nodes) {
+				const pos = positions.get(node.id);
+				if (!pos) continue;
+				const active = hoverId === node.id || dragId === node.id;
+				const color = typeColors[node.type] ?? '#3b82f6';
+				ctx.beginPath();
+				ctx.arc(pos.x, pos.y, pos.r, 0, Math.PI * 2);
+				ctx.fillStyle = active ? color : `${color}cc`;
+				ctx.fill();
+				if (active) {
+					ctx.strokeStyle = '#ffffff';
+					ctx.lineWidth = 2;
+					ctx.stroke();
+				}
+			}
+			if (hoverId) {
+				const node = nodes.find((n) => n.id === hoverId);
+				const pos = positions.get(hoverId);
+				if (node && pos) {
+					ctx.font = '12px sans-serif';
+					ctx.fillStyle = 'rgba(30,30,30,0.9)';
+					ctx.fillText(node.title, pos.x + pos.r + 4, pos.y + 4);
+				}
+			}
+		};
+
+		let iterations = 0;
+		const loop = (): void => {
+			if (!running || !canvas.isConnected) {
+				running = false;
+				if (animationFrame) window.cancelAnimationFrame(animationFrame);
+				return;
+			}
+			if (iterations < 200 || dragId !== null) {
+				step();
+				iterations += 1;
+				draw();
+				animationFrame = window.requestAnimationFrame(loop);
+			} else {
+				draw();
+			}
+		};
+		loop();
+
+		const toLocal = (event: PointerEvent): { x: number; y: number } => {
+			const rect = canvas.getBoundingClientRect();
+			return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+		};
+
+		this.registerDomEvent(canvas, 'pointerdown', (event: PointerEvent) => {
+			const { x, y } = toLocal(event);
+			dragId = nodeAt(x, y);
+			if (dragId) {
+				canvas.setPointerCapture(event.pointerId);
+				iterations = 0;
+				loop();
+			}
+		});
+		this.registerDomEvent(canvas, 'pointermove', (event: PointerEvent) => {
+			const { x, y } = toLocal(event);
+			if (dragId) {
+				const pos = positions.get(dragId);
+				if (pos) { pos.x = x; pos.y = y; }
+			} else {
+				hoverId = nodeAt(x, y);
+				canvas.style.cursor = hoverId ? 'pointer' : 'default';
+				draw();
+			}
+		});
+		this.registerDomEvent(canvas, 'pointerup', () => {
+			if (!dragId) return;
+			dragId = null;
+			iterations = 0;
+			loop();
+		});
+		this.registerDomEvent(canvas, 'click', (event: PointerEvent) => {
+			const { x, y } = toLocal(event);
+			const id = nodeAt(x, y);
+			if (!id) return;
+			const file = this.app.vault.getAbstractFileByPath(id);
+			if (file instanceof TFile) {
+				void this.app.workspace.getLeaf('tab').openFile(file);
+			} else {
+				this.setFeedback(`找不到笔记：${id}`);
+			}
+		});
+
+		/* 搜索定位节点 */
+		this.registerDomEvent(searchInput, 'input', () => {
+			const query = searchInput.value.trim().toLocaleLowerCase();
+			if (!query) { hoverId = null; draw(); return; }
+			const found = nodes.find((node) =>
+				node.title.toLocaleLowerCase().includes(query) || node.id.toLocaleLowerCase().includes(query),
+			);
+			hoverId = found?.id ?? null;
+			draw();
+		});
+
+		/* 视图关闭时（canvas 被移除）停止动画与事件 */
+		this.registerDomEvent(window, 'resize', resize);
 	}
 
 	private renderHotPage(parent: HTMLElement): void {
@@ -968,78 +1208,102 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		const heading = header.createDiv();
 		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '🔥 DAILY HOT', attr: { style: 'color:var(--color-orange);' } });
 		heading.createEl('h2', { text: '每日热点', attr: { style: 'font-size:20px;font-weight:700;' } });
-		heading.createEl('p', { text: '聚合公开热点，数据来自公开 API，每 30 分钟自动刷新。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		heading.createEl('p', { text: '聚合公开热点，打开页面自动加载实时数据；数据源不可用时显示示例数据。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
 		const refreshBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
 		refreshBtn.createSpan({ text: '刷新热点' });
 
 		const grid = section.createDiv({ cls: 'agent-dashboard-hot-grid' });
 		grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
 
-		const renderCards = (items: Array<{ rank: number; title: string; desc: string; category: string; source: string; heat: string; detail: string }>) => {
-			grid.empty();
-			items.forEach((item) => {
-				const card = grid.createDiv({ cls: 'agent-dashboard-hot-card' });
-				const rankClass = item.rank <= 3 ? ` agent-dashboard-hot-rank top${item.rank}` : ' agent-dashboard-hot-rank';
-				card.createSpan({ cls: rankClass, text: String(item.rank) });
-				const content = card.createDiv({ cls: 'agent-dashboard-hot-content' });
-				content.createSpan({ cls: 'agent-dashboard-hot-title', text: item.title });
-				content.createEl('p', { cls: 'agent-dashboard-hot-desc', text: item.desc });
-				const meta = content.createDiv({ cls: 'agent-dashboard-hot-meta' });
-				meta.createSpan({ cls: 'agent-dashboard-hot-category', text: item.category });
-				meta.createSpan({ cls: 'agent-dashboard-hot-source', text: item.source });
-				meta.createSpan({ text: `${item.heat} 热度` });
-				const detail = content.createDiv({ text: item.detail, attr: { style: 'display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--background-modifier-border);font-size:12px;color:var(--text-muted);line-height:1.6;' } });
-				this.registerDomEvent(card, 'click', () => {
-					const hidden = detail.style.display === 'none';
-					detail.style.display = hidden ? 'block' : 'none';
-					card.style.borderColor = hidden ? 'var(--interactive-accent)' : 'var(--background-modifier-border)';
-				});
-			});
-		};
-
-		/* Fallback mock data */
-		const mockData = [
-			{ rank: 1, title: 'OpenAI 发布 GPT-5 预览版，推理能力大幅提升', desc: '新模型在数学推理和代码生成方面取得显著突破，支持多模态输入。', category: 'AI', source: '36氪', heat: '2.3万', detail: 'OpenAI 最新发布的 GPT-5 预览版在多项基准测试中表现优异，API 价格与 GPT-4 持平。' },
-			{ rank: 2, title: '苹果 Vision Pro 2 预计明年发布，重量减轻 30%', desc: '新设备将采用更轻的材料和改进的人体工学设计，价格可能下调。', category: '科技', source: 'IT之家', heat: '1.8万', detail: '苹果正在开发 Vision Pro 第二代产品，预计 2027 年第一季度发布。' },
-			{ rank: 3, title: '中国团队开源 1000 亿参数大模型，性能接近 GPT-4', desc: '该模型在中文理解和生成任务上表现优异，已在 GitHub 开源。', category: 'AI', source: '机器之心', heat: '1.5万', detail: '中科院联合多家高校开源了"夸父-100B"千亿参数大语言模型，采用 Apache 2.0 许可证。' },
-			{ rank: 4, title: 'Obsidian 发布 1.8 版本，新增实时协作编辑功能', desc: '新版本支持多人同时编辑同一笔记，数据端到端加密。', category: '工具', source: 'Obsidian 官方', heat: '1.2万', detail: 'Obsidian 1.8 首次引入实时协作功能，基于 CRDT 算法，免费使用。' },
-			{ rank: 5, title: 'GitHub Copilot 推出 Workspace 模式', desc: '开发者可以通过自然语言描述需求，AI 自动完成跨文件修改。', category: '开发', source: 'GitHub 官方', heat: '9.8k', detail: 'Copilot Workspace 模式支持代码审查、冲突检测和逐步应用修改，Beta 阶段。' },
-			{ rank: 6, title: 'Google 发布 Gemini 2.0', desc: 'Gemini 2.0 可直接调用 Google 搜索、地图等工具执行复杂任务。', category: 'AI', source: 'The Verge', heat: '8.5k', detail: 'Gemini 2.0 原生集成 Google 搜索、地图、Gmail 等工具，API 定价降低 40%。' },
+		/* 示例数据（数据源不可用时的兜底，避免空白页） */
+		const mockData: HotItem[] = [
+			{ rank: 1, title: '示例热点 1：AI 大模型技术新进展（示例数据，刷新后加载真实热点）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: 'AI', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
+			{ rank: 2, title: '示例热点 2：科技行业动态速览（示例数据）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: '科技', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
+			{ rank: 3, title: '示例热点 3：开发者工具与开源社区（示例数据）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: '开发', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
 		];
 
-		renderCards(mockData);
+		/* 先展示示例，随后自动加载真实热点 */
+		this.renderHotCards(grid, mockData);
+		void this.loadHot(refreshBtn, grid);
 
-		this.registerDomEvent(refreshBtn, 'click', async () => {
-			refreshBtn.disabled = true;
-			refreshBtn.setText('加载中…');
-			grid.empty();
-			grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
-			try {
-				const resp = await requestUrl({ url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists', method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
-				const hotItems: Array<{ rank: number; title: string; desc: string; category: string; source: string; heat: string; detail: string }> = [];
-				if (resp.status === 200 && isRecord(resp.json) && Array.isArray(resp.json.data)) {
-					resp.json.data.slice(0, 6).forEach((item: unknown, i: number) => {
-						if (!isRecord(item)) return;
-						const target = isRecord(item.target) ? item.target : undefined;
-						const feedSpecific = isRecord(item.feedSpecific) ? item.feedSpecific : undefined;
-						hotItems.push({
-							rank: i + 1,
-							title: typeof target?.title === 'string' ? target.title : '热点',
-							desc: typeof target?.excerpt === 'string' ? target.excerpt : (isRecord(target?.titleArea) && typeof target.titleArea.text === 'string' ? target.titleArea.text : ''),
-							category: typeof feedSpecific?.currentType === 'string' ? feedSpecific.currentType : '热点',
-							source: '知乎',
-							heat: `${(typeof item.detailText === 'string' ? item.detailText.replace(/[^0-9]/g, '') : '') || '—'} 热度`,
-							detail: typeof target?.excerpt === 'string' ? target.excerpt : '点击查看详情',
-						});
-					});
-				}
-				renderCards(hotItems.length > 0 ? hotItems : mockData);
-			} catch {
-				renderCards(mockData);
-			} finally {
-				refreshBtn.disabled = false;
-				refreshBtn.setText('刷新热点');
+		this.registerDomEvent(refreshBtn, 'click', () => {
+			void this.loadHot(refreshBtn, grid);
+		});
+	}
+
+	private async loadHot(refreshBtn: HTMLButtonElement, grid: HTMLElement): Promise<void> {
+		if (refreshBtn.disabled) return;
+		refreshBtn.disabled = true;
+		refreshBtn.setText('加载中…');
+		grid.empty();
+		grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
+		try {
+			const items = await this.fetchHotItems();
+			if (items) {
+				this.renderHotCards(grid, items);
+			} else {
+				this.renderHotCards(grid, []);
 			}
+		} finally {
+			refreshBtn.disabled = false;
+			refreshBtn.setText('刷新热点');
+		}
+	}
+
+	private async fetchHotItems(): Promise<HotItem[] | null> {
+		try {
+			const resp = await requestUrl({
+				url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists',
+				method: 'GET',
+				headers: { 'User-Agent': 'Mozilla/5.0' },
+				timeout: 15000,
+			} as Parameters<typeof requestUrl>[0] & { timeout?: number });
+			const hotItems: HotItem[] = [];
+			if (resp.status === 200 && isRecord(resp.json) && Array.isArray(resp.json.data)) {
+				resp.json.data.slice(0, 6).forEach((item: unknown, i: number) => {
+					if (!isRecord(item)) return;
+					const target = isRecord(item.target) ? item.target : undefined;
+					const feedSpecific = isRecord(item.feedSpecific) ? item.feedSpecific : undefined;
+					hotItems.push({
+						rank: i + 1,
+						title: typeof target?.title === 'string' ? target.title : '热点',
+						desc: typeof target?.excerpt === 'string' ? target.excerpt : (isRecord(target?.titleArea) && typeof target.titleArea.text === 'string' ? target.titleArea.text : ''),
+						category: typeof feedSpecific?.currentType === 'string' ? feedSpecific.currentType : '热点',
+						source: '知乎',
+						heat: `${(typeof item.detailText === 'string' ? item.detailText.replace(/[^0-9]/g, '') : '') || '—'} 热度`,
+						detail: typeof target?.excerpt === 'string' ? target.excerpt : '点击查看详情',
+					});
+				});
+			}
+			return hotItems.length > 0 ? hotItems : null;
+		} catch {
+			return null;
+		}
+	}
+
+	private renderHotCards(grid: HTMLElement, items: HotItem[]): void {
+		grid.empty();
+		if (items.length === 0) {
+			grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '热点数据加载失败，请检查网络后点击「刷新热点」重试。' });
+			return;
+		}
+		items.forEach((item) => {
+			const card = grid.createDiv({ cls: 'agent-dashboard-hot-card' });
+			const rankClass = item.rank <= 3 ? ` agent-dashboard-hot-rank top${item.rank}` : ' agent-dashboard-hot-rank';
+			card.createSpan({ cls: rankClass, text: String(item.rank) });
+			const content = card.createDiv({ cls: 'agent-dashboard-hot-content' });
+			content.createSpan({ cls: 'agent-dashboard-hot-title', text: item.title });
+			content.createEl('p', { cls: 'agent-dashboard-hot-desc', text: item.desc });
+			const meta = content.createDiv({ cls: 'agent-dashboard-hot-meta' });
+			meta.createSpan({ cls: 'agent-dashboard-hot-category', text: item.category });
+			meta.createSpan({ cls: 'agent-dashboard-hot-source', text: item.source });
+			meta.createSpan({ text: `${item.heat} 热度` });
+			const detail = content.createDiv({ text: item.detail, attr: { style: 'display:none;margin-top:10px;padding-top:10px;border-top:1px solid var(--background-modifier-border);font-size:12px;color:var(--text-muted);line-height:1.6;' } });
+			this.registerDomEvent(card, 'click', () => {
+				const hidden = detail.style.display === 'none';
+				detail.style.display = hidden ? 'block' : 'none';
+				card.style.borderColor = hidden ? 'var(--interactive-accent)' : 'var(--background-modifier-border)';
+			});
 		});
 	}
 
@@ -1128,63 +1392,113 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		}
 	}
 
-	private renderChatPlaceholder(parent: HTMLElement): void {
+	private renderChatPage(parent: HTMLElement): void {
 		const card = parent.createEl('section', {
-			cls: 'agent-dashboard-surface',
+			cls: 'agent-dashboard-surface agent-dashboard-chat-card',
 			attr: { 'aria-label': '对话' },
 		});
 		const header = card.createDiv({ cls: 'agent-dashboard-surface-header' });
-		header.createSpan({ cls: 'agent-dashboard-eyebrow', text: '💬 CHAT' });
-		header.createEl('h2', { text: '对话' });
-		header.createEl('p', { text: '对话功能开发中：当前发送消息会生成一篇深度研究报告，尚未接入实时对话。' });
+		const heading = header.createDiv();
+		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '💬 CHAT' });
+		heading.createEl('h2', { text: '对话' });
+		heading.createEl('p', { text: '墨忆台助手：会引用 Vault 里相关的笔记回答你。需在设置中配置模型（云端 API 或本地 Ollama）。' });
+
+		const clearBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+		clearBtn.createSpan({ text: '清空对话' });
+		this.registerDomEvent(clearBtn, 'click', () => {
+			this.chatService?.clearMessages();
+			this.chatMessagesEl?.empty();
+			this.appendChatWelcome();
+		});
 
 		/* 消息列表 */
 		const messageList = card.createDiv({ cls: 'agent-dashboard-chat-messages' });
-		const welcomeMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
-		welcomeMsg.createSpan({ text: '你好！我是墨忆台助手。有什么可以帮助你的？' });
+		this.chatMessagesEl = messageList;
+		this.appendChatWelcome();
 
 		/* 输入区 */
 		const inputArea = card.createDiv({ cls: 'agent-dashboard-chat-input-area' });
 		const input = inputArea.createEl('input', {
 			cls: 'agent-dashboard-chat-input',
-			attr: { type: 'text', placeholder: '输入你的问题…', 'aria-label': '输入消息' },
+			attr: { type: 'text', placeholder: '输入你的问题…（回车发送）', 'aria-label': '输入消息' },
 		});
 		const sendBtn = inputArea.createEl('button', {
 			cls: 'agent-dashboard-chat-send-btn',
 			attr: { type: 'button', 'aria-label': '发送' },
 		});
 		sendBtn.createSpan({ text: '发送' });
+		const stopBtn = inputArea.createEl('button', {
+			cls: 'agent-dashboard-chat-send-btn',
+			attr: { type: 'button', 'aria-label': '停止生成' },
+		});
+		stopBtn.createSpan({ text: '停止' });
+		stopBtn.hidden = true;
 
-		this.registerDomEvent(sendBtn, 'click', () => void this.handleChatSend(input, messageList, sendBtn));
+		this.registerDomEvent(sendBtn, 'click', () => void this.handleChatSend(input, sendBtn, stopBtn));
 		this.registerDomEvent(input, 'keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter') void this.handleChatSend(input, messageList, sendBtn);
+			if (e.key === 'Enter' && !e.shiftKey) {
+				e.preventDefault();
+				void this.handleChatSend(input, sendBtn, stopBtn);
+			}
+		});
+		this.registerDomEvent(stopBtn, 'click', () => {
+			this.chatService?.stop();
+			stopBtn.hidden = true;
+			sendBtn.disabled = false;
 		});
 	}
 
-	private async handleChatSend(input: HTMLInputElement, messageList: HTMLElement, sendBtn: HTMLButtonElement): Promise<void> {
+	private appendChatWelcome(): void {
+		if (!this.chatMessagesEl) return;
+		const msg = this.chatMessagesEl.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
+		msg.createSpan({ text: '你好！我是墨忆台助手。问我关于你笔记的问题吧。' });
+	}
+
+	private appendChatMessage(role: 'user' | 'assistant', text: string): void {
+		if (!this.chatMessagesEl) return;
+		const msg = this.chatMessagesEl.createDiv({ cls: `agent-dashboard-chat-message agent-dashboard-chat-message--${role}` });
+		msg.createSpan({ text });
+		this.chatMessagesEl.scrollTop = this.chatMessagesEl.scrollHeight;
+	}
+
+	private async handleChatSend(input: HTMLInputElement, sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): Promise<void> {
 		const text = input.value.trim();
 		if (!text) return;
+		if (!this.chatService) {
+			this.appendChatMessage('assistant', '对话服务未初始化，请重启插件后再试。');
+			return;
+		}
 		input.value = '';
 		sendBtn.disabled = true;
+		this.appendChatMessage('user', text);
 
-		/* 用户消息 */
-		const userMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--user' });
-		userMsg.createSpan({ text });
+		/* 助手占位 + 流式输出 */
+		const assistantEl = this.chatMessagesEl?.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
+		const contentEl = assistantEl?.createSpan();
+		contentEl?.setText('思考中…');
+		stopBtn.hidden = false;
 
-		/* 助手消息（占位） */
-		const assistantMsg = messageList.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
-		const loadingEl = assistantMsg.createSpan({ text: '思考中…' });
+		const unsubscribe = this.chatService.on((event) => {
+			if (this.isClosed || !contentEl) return;
+			if (event.type === 'delta') {
+				contentEl.setText((contentEl.getText() === '思考中…' ? '' : contentEl.getText()) + (event.content ?? ''));
+				if (this.chatMessagesEl) this.chatMessagesEl.scrollTop = this.chatMessagesEl.scrollHeight;
+			} else if (event.type === 'references' && event.references && event.references.length > 0 && assistantEl) {
+				const refs = event.references.slice(0, 3).map((ref) => ref.title).join('、');
+				assistantEl.createDiv({ cls: 'agent-dashboard-chat-refs', text: `📎 引用笔记：${refs}` });
+			} else if (event.type === 'error') {
+				contentEl.setText(`抱歉，出了点问题：${event.error ?? '未知错误'}`);
+			}
+		});
 
 		try {
-			/* 使用深度研究作为回答 */
-			const context = createRequestContext('user');
-			await this.actionService.runDeepResearch(context);
-			loadingEl.setText('已提交深度研究任务，请在总览页查看结果。');
+			await this.chatService.sendMessage(text);
 		} catch (error) {
-			loadingEl.setText(`抱歉，回答时出错：${this.getErrorMessage(error)}`);
+			if (contentEl) contentEl.setText(`抱歉，出了点问题：${this.getErrorMessage(error)}`);
 		} finally {
+			unsubscribe();
+			stopBtn.hidden = true;
 			sendBtn.disabled = false;
-			messageList.scrollTop = messageList.scrollHeight;
 		}
 	}
 
@@ -1239,6 +1553,14 @@ this.registerDomEvent(button, 'click', () => {
 						navButton.setAttr('aria-pressed', String(isActive));
 					});
 					this.activeViewLabelEl?.setText(item.label);
+					if (item.label === '设置') {
+						/* 打开 Obsidian 设置并定位到本插件 */
+						const setting = (this.app as unknown as { setting: { open: () => void; openTabById?: (id: string) => void } }).setting;
+						setting.open();
+						setting.openTabById?.('agent-dashboard');
+						this.setFeedback('已打开插件设置。');
+						return;
+					}
 					if (item.target) {
 						this.activePage = item.target;
 						this.showPage(item.target);
@@ -1281,6 +1603,22 @@ this.registerDomEvent(button, 'click', () => {
 		this.registerDomEvent(searchInput, 'input', () => {
 			this.searchQuery = searchInput.value;
 			this.updateSearchVisibility();
+		});
+		/* 回车：跳转到知识库页并执行全库搜索 */
+		this.registerDomEvent(searchInput, 'keydown', (event: KeyboardEvent) => {
+			if (event.key !== 'Enter') return;
+			const query = searchInput.value.trim();
+			this.searchQuery = query;
+			this.knowledgeQuery = query;
+			this.activePage = 'agent-dashboard-knowledge';
+			this.showPage('agent-dashboard-knowledge');
+			this.activeViewLabelEl?.setText('知识库');
+			if (query) {
+				void this.loadKnowledgeResults();
+			} else {
+				this.renderKnowledgeEmpty('输入关键词开始搜索。');
+			}
+			this.setFeedback(query ? `正在知识库搜索「${query}」…` : '请输入搜索关键词。');
 		});
 
 		const syncState = actions.createDiv({ cls: 'agent-dashboard-sync-state' });
@@ -1651,6 +1989,26 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 				void this.openGitHubUrl(`https://github.com/${snapshot.fullName}`);
 			});
 
+			/* 一键生成 AI 中文动态报告（保存到 Reports 并打开） */
+			const reportButton = card.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+			reportButton.createSpan({ text: '生成中文动态报告' });
+			this.registerDomEvent(reportButton, 'click', () => {
+				reportButton.disabled = true;
+				reportButton.setText('生成中…');
+				void this.generateProjectReport(createRequestContext('user'))
+					.then((path) => {
+						new Notice(`报告已生成：${path}`);
+						void this.openNote(path);
+					})
+					.catch((error: unknown) => {
+						showActionError(error);
+					})
+					.finally(() => {
+						reportButton.disabled = false;
+						reportButton.setText('生成中文动态报告');
+					});
+			});
+
 			if (snapshot.releases.length > 0) {
 				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
 				section.createSpan({ cls: 'agent-dashboard-project-label', text: '版本发布' });
@@ -1669,6 +2027,36 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 				});
 			} else {
 				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无版本发布记录' });
+			}
+
+			/* 最近提交（无需跳 GitHub 即可阅读） */
+			if (snapshot.commits.length > 0) {
+				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
+				section.createSpan({ cls: 'agent-dashboard-project-label', text: '最近提交' });
+				snapshot.commits.slice(0, 8).forEach((commit) => {
+					const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
+					row.createSpan({ cls: 'agent-dashboard-project-tag', text: commit.sha });
+					const desc = row.createSpan({ cls: 'agent-dashboard-project-desc' });
+					desc.setText(`${commit.message}${commit.date ? ` · ${this.formatDate(new Date(commit.date))}` : ''}`);
+					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(commit.url); });
+				});
+			} else if (!snapshot.error) {
+				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无提交记录' });
+			}
+
+			/* 讨论动态（Issues / PR） */
+			if (snapshot.issues.length > 0) {
+				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
+				section.createSpan({ cls: 'agent-dashboard-project-label', text: '讨论动态' });
+				snapshot.issues.slice(0, 8).forEach((issue) => {
+					const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
+					row.createSpan({ cls: `agent-dashboard-project-tag ${issue.state === 'open' ? 'is-open' : 'is-closed'}`, text: issue.kind === 'pr' ? 'PR' : 'Issue' });
+					const desc = row.createSpan({ cls: 'agent-dashboard-project-desc' });
+					desc.setText(issue.title);
+					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(issue.url); });
+				});
+			} else if (!snapshot.error) {
+				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无讨论动态' });
 			}
 		}
 
