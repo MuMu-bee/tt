@@ -24,7 +24,7 @@ test('cosine similarity orders aligned vectors above unrelated ones', () => {
 
 test('normalize produces a unit vector', () => {
 	const normalized = normalize([3, 4]);
-	const magnitude = Math.sqrt(normalized[0] ** 2 + normalized[1] ** 2);
+	const magnitude = Math.sqrt((normalized[0] ?? 0) ** 2 + (normalized[1] ?? 0) ** 2);
 	assert.ok(Math.abs(magnitude - 1) < 1e-12);
 });
 

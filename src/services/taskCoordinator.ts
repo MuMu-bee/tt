@@ -51,6 +51,12 @@ export class TaskCoordinator {
 		this.tasks.forEach((t) => { if (t.status === 'running') t.status = 'paused'; });
 	}
 
+	/** Stops every timer and removes all tasks. Call on plugin unload. */
+	dispose(): void {
+		this.pauseAll();
+		this.tasks.clear();
+	}
+
 	resumeAll(): void {
 		this.isPaused = false;
 		this.tasks.forEach((task) => {
@@ -69,8 +75,8 @@ export class TaskCoordinator {
 	private schedule(task: ScheduledTask): void {
 		if (this.isPaused) return;
 		/* Run immediately first, then on interval */
-		this.runTask(task);
-		const timer = setInterval(() => this.runTask(task), task.intervalMs);
+		void this.runTask(task);
+		const timer = setInterval(() => { void this.runTask(task); }, task.intervalMs);
 		this.timers.set(task.id, timer);
 	}
 

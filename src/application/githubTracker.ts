@@ -7,10 +7,7 @@ import type {
 
 /**
  * Pure helpers for the GitHub project tracker.
- *
- * This module MUST stay free of any obsidian import so it can run under
- * `node --experimental-strip-types` in the test suite. It only parses plain
- * GitHub API payloads and builds prompt text.
+ * 注意：保持无 obsidian 依赖，以便在 node --experimental-strip-types 下测试。
  */
 
 export interface RepoRef {

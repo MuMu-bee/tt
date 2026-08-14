@@ -46,7 +46,12 @@ export class FeedService {
 			const data = await loader();
 			await this.cache.write(name, data);
 			return data;
-		} catch {
+		} catch (error) {
+			// 抓取失败不再静默吞掉：记录日志便于排查（限流、网络、上游故障等）。
+			console.error(
+				`[agent-dashboard] 信息流「${name}」抓取失败，已回退到缓存或空数据。`,
+				error,
+			);
 			return cached?.data ?? empty;
 		}
 	}

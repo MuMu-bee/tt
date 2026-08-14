@@ -1,8 +1,9 @@
 import { sha256Hex } from '../utils/sha256.ts';
 import type { RequestContext } from '../application/requestContext.ts';
-import type { ProposalStatus, WriteResult } from '../application/contracts.ts';
+import type { AuditEvent, ProposalStatus, WriteResult } from '../application/contracts.ts';
 import type { ProposalStore } from '../ports/proposalPort.ts';
 import type { ApprovalStore } from '../ports/approvalPort.ts';
+import type { AuditSink } from '../ports/auditSink.ts';
 import type { WritePort } from '../ports/writePort.ts';
 import { WriteService } from './writeService.ts';
 import type { PersistenceGate } from './persistenceGate.ts';
@@ -15,14 +16,16 @@ export class ProposalApplyService {
   private readonly port: WritePort;
   private readonly persistenceGate?: PersistenceGate;
   private readonly snapshotHook?: (path: string, before: string, after: string, context: RequestContext) => Promise<void>;
+  private readonly auditSink?: AuditSink;
 
-  constructor(proposals: ProposalStore, approvals: ApprovalStore, writes: WriteService, port: WritePort, persistenceGate?: PersistenceGate, snapshotHook?: (path: string, before: string, after: string, context: RequestContext) => Promise<void>) {
+  constructor(proposals: ProposalStore, approvals: ApprovalStore, writes: WriteService, port: WritePort, persistenceGate?: PersistenceGate, snapshotHook?: (path: string, before: string, after: string, context: RequestContext) => Promise<void>, auditSink?: AuditSink) {
     this.proposals = proposals;
     this.approvals = approvals;
     this.writes = writes;
     this.port = port;
     this.persistenceGate = persistenceGate;
     this.snapshotHook = snapshotHook;
+    this.auditSink = auditSink;
   }
   async apply(proposalId: string, context: RequestContext): Promise<ProposalApplyResult> {
     if (this.persistenceGate && !this.persistenceGate.isWritable()) {
@@ -31,10 +34,17 @@ export class ProposalApplyService {
     const proposal = await this.proposals.get(proposalId, context);
     if (!proposal) throw new Error('proposal not found');
     if (proposal.status === 'applied') throw new Error('proposal already applied');
-    if (proposal.status !== 'approved') return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: proposal.status };
+    if (proposal.status !== 'approved') {
+      /* 未授权的 apply 尝试也留审计痕迹。 */
+      await this.auditSkipped(proposal, 'skipped', context);
+      return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: proposal.status };
+    }
     if (proposal.target_zone === 'fiction' || proposal.target_zone === 'unknown') { await this.proposals.updateStatus(proposalId, 'failed', context); return { path: proposal.target_path, status: 'proposal_only', before_hash: proposal.base_hash, error_code: 'FICTION_PROPOSAL_ONLY', proposal_status: 'failed' }; }
     const approval = await this.approvals.getForProposal(proposalId, context);
-    if (!approval || approval.decision !== 'approve') return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: proposal.status };
+    if (!approval || approval.decision !== 'approve') {
+      await this.auditSkipped(proposal, 'skipped', context);
+      return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: proposal.status };
+    }
     const current = await this.port.read(proposal.target_path, context.child ? context.child() : context);
     if (sha256Hex(current) !== proposal.base_hash) { await this.proposals.updateStatus(proposalId, 'conflict', context); return { path: proposal.target_path, status: 'conflict', before_hash: sha256Hex(current), error_code: 'HASH_CONFLICT', proposal_status: 'conflict' }; }
     const result = await this.writes.write({ path: proposal.target_path, content: proposal.after, before_hash: proposal.base_hash, kind: proposal.change_kind, scope_snapshot: { kind: 'file', value: proposal.target_path }, zone: proposal.target_zone, request_id: proposal.request_id }, context);
@@ -45,5 +55,19 @@ export class ProposalApplyService {
       try { await this.snapshotHook(proposal.target_path, proposal.before, proposal.after, context.child ? context.child() : context); } catch { /* snapshot failure is non-fatal */ }
     }
     return { ...result, proposal_status: nextStatus };
+  }
+
+  private async auditSkipped(proposal: { target_path: string; base_hash: string; change_kind: string }, result: string, context: RequestContext): Promise<void> {
+    if (!this.auditSink) return;
+    const event: AuditEvent = {
+      request_id: context.request_id,
+      actor: context.actor,
+      action: 'proposal-apply-skipped',
+      path: proposal.target_path,
+      before_hash: proposal.base_hash,
+      result,
+      created_at: new Date().toISOString(),
+    };
+    try { await this.auditSink.append(event, context.child ? context.child() : context); } catch { /* audit of a skipped apply is best-effort */ }
   }
 }

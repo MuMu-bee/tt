@@ -2,10 +2,7 @@ import type { AgentConfig } from '../data/dashboardTypes';
 
 /**
  * Pure helpers that build model completion requests and extract responses.
- *
- * This module MUST stay free of any obsidian import so it can run under
- * `node --experimental-strip-types` in the test suite. All functions here
- * operate only on plain data and throw user-facing Chinese errors.
+ * 注意：保持无 obsidian 依赖，以便在 node --experimental-strip-types 下测试。
  */
 
 export interface ModelCompletionRequest {

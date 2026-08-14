@@ -4,6 +4,7 @@ import {
 	DEFAULT_SETTINGS,
 	AgentDashboardSettings,
 } from './settings';
+import { WORKBENCH_DIRS } from './data/dashboardTypes';
 import { OpenAiModel } from './adapters/openAiModel';
 import { isMarkdownPath } from './services/indexLifecycleService';
 import { composeRuntime } from './services/runtimeComposition';
@@ -23,9 +24,14 @@ import {
 	VIEW_TYPE_AGENT_DASHBOARD,
 } from './views/AgentDashboardView';
 
+const AUTO_REPORT_POLL_MS = 60_000;
+const AUTO_REPORT_INITIAL_DELAY_MS = 30_000;
+
 export default class AgentDashboardPlugin extends Plugin {
 	settings!: AgentDashboardSettings;
 	private projectTracker!: ProjectTracker;
+	private taskCoordinator?: TaskCoordinator;
+	private delayedReportTimer: number | null = null;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
@@ -44,49 +50,50 @@ export default class AgentDashboardPlugin extends Plugin {
 		);
 		const projectReport = new ProjectReportService(model);
 		const visionService = new VisionService(this.app, model);
-			const researchService = new ResearchService(this.app);
-			const memoryPublish = new MemoryPublishService(this.app);
+		const researchService = new ResearchService(this.app);
+		const memoryPublish = new MemoryPublishService(this.app);
 
-			/* V0.5: TaskCoordinator + PatrolService */
-			const taskCoordinator = new TaskCoordinator();
-			const patrolService = new PatrolService(this.app, lifecycle);
-			taskCoordinator.register({
-				id: 'patrol',
-				name: '定时巡检',
-				description: '定期检查 Vault 健康状态、缺失 frontmatter 和索引状态',
-				intervalMs: 30 * 60 * 1000,
-				status: 'idle',
-				lastRun: null,
-				nextRun: null,
-				runCount: 0,
-				handler: async () => {
-					const report = await patrolService.patrol();
-					new Notice(`巡检完成：${report.noteCount} 篇笔记，${report.missingFrontmatter} 篇缺 frontmatter`);
-				},
-			});
-			taskCoordinator.start('patrol');
+		/* V0.5: TaskCoordinator + PatrolService */
+		const taskCoordinator = new TaskCoordinator();
+		this.taskCoordinator = taskCoordinator;
+		const patrolService = new PatrolService(this.app, lifecycle);
+		taskCoordinator.register({
+			id: 'patrol',
+			name: '定时巡检',
+			description: '定期检查 Vault 健康状态、缺失 frontmatter 和索引状态',
+			intervalMs: 30 * 60 * 1000,
+			status: 'idle',
+			lastRun: null,
+			nextRun: null,
+			runCount: 0,
+			handler: async () => {
+				const report = await patrolService.patrol();
+				new Notice(`巡检完成：${report.noteCount} 篇笔记，${report.missingFrontmatter} 篇缺 frontmatter`);
+			},
+		});
+		taskCoordinator.start('patrol');
 
 		this.registerView(
 			VIEW_TYPE_AGENT_DASHBOARD,
-(leaf) => new AgentDashboardView(
-					leaf,
-					dashboardService,
-					actionService,
-					searchService,
-					lifecycle,
-					runtime.proposals,
-					runtime.approvals,
-					runtime.apply,
-					runtime.persistence,
-					runtime.organize,
-					runtime.audit,
-					this.projectTracker,
-					projectReport,
-					visionService,
-					researchService,
-					memoryPublish,
-					patrolService,
-				),
+			(leaf) => new AgentDashboardView(
+				leaf,
+				dashboardService,
+				actionService,
+				searchService,
+				lifecycle,
+				runtime.proposals,
+				runtime.approvals,
+				runtime.apply,
+				runtime.persistence,
+				runtime.organize,
+				runtime.audit,
+				this.projectTracker,
+				projectReport,
+				visionService,
+				researchService,
+				memoryPublish,
+				patrolService,
+			),
 		);
 
 		this.setupAutoProjectReport(this.projectTracker, projectReport);
@@ -169,7 +176,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			if (now.getHours() < 8) {
 				return false;
 			}
-			const file = this.app.vault.getAbstractFileByPath(`Reports/${todayReportName()}`);
+			const file = this.app.vault.getAbstractFileByPath(`${WORKBENCH_DIRS.reports}/${todayReportName()}`);
 			return !(file instanceof TFile);
 		};
 
@@ -191,17 +198,17 @@ export default class AgentDashboardPlugin extends Plugin {
 							}
 						}
 						if (parts.length > 0) {
-							await this.app.vault.adapter.mkdir('Reports');
-							await this.app.vault.create(`Reports/${todayReportName()}`, parts.join('\n\n---\n\n') + '\n');
+							await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
+							await this.app.vault.create(`${WORKBENCH_DIRS.reports}/${todayReportName()}`, parts.join('\n\n---\n\n') + '\n');
 						}
 					})
 					.catch(() => undefined);
 			});
 		};
 
-		this.registerInterval(window.setInterval(runIfDue, 60_000));
+		this.registerInterval(window.setInterval(runIfDue, AUTO_REPORT_POLL_MS));
 		// Also run shortly after startup if it is already due today.
-		window.setTimeout(runIfDue, 30_000);
+		this.delayedReportTimer = window.setTimeout(runIfDue, AUTO_REPORT_INITIAL_DELAY_MS);
 	}
 
 	async activateDashboardView(): Promise<void> {
@@ -217,7 +224,13 @@ export default class AgentDashboardPlugin extends Plugin {
 		await workspace.revealLeaf(leaf);
 	}
 
-	onunload(): void {}
+	onunload(): void {
+		this.taskCoordinator?.dispose();
+		if (this.delayedReportTimer !== null) {
+			window.clearTimeout(this.delayedReportTimer);
+			this.delayedReportTimer = null;
+		}
+	}
 
 	async loadSettings(): Promise<void> {
 		const stored = (await this.loadData()) as Partial<AgentDashboardSettings> | null;

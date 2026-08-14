@@ -6,6 +6,8 @@ import type { WritePort } from '../ports/writePort.ts';
 import type { AuditSink } from '../ports/auditSink.ts';
 import type { IndexLifecycleService } from './indexLifecycleService.ts';
 import type { PersistenceGate } from './persistenceGate.ts';
+import { parseVaultDocument } from '../domain/vault-document.ts';
+import { inferZone } from '../domain/zones.ts';
 
 export class WriteService {
   private readonly persistenceGate?: PersistenceGate;
@@ -33,16 +35,36 @@ export class WriteService {
     const current = await this.port.read(request.path, context.child ? context.child() : context);
     const beforeHash = hash(current);
     if (beforeHash !== request.before_hash) return this.result(request, 'conflict', 'HASH_CONFLICT', beforeHash);
+
+    /* Re-infer the zone from the actual file content so callers cannot bypass
+       proposal-only zones by self-reporting a different zone. */
+    const actualZone = inferZone(request.path, parseVaultDocument(request.path, current).frontmatter);
+    if (actualZone === 'fiction' || actualZone === 'unknown') return this.result(request, 'proposal_only', 'FICTION_PROPOSAL_ONLY');
+
+    let result: WriteResult;
     try {
       await this.port.writeAtomic(request.path, request.content, context.child ? context.child() : context);
       const after = await this.port.read(request.path, context.child ? context.child() : context);
       const afterHash = hash(after);
       let refresh: RefreshStatus | undefined;
       try { await this.lifecycle?.modify(request.path, context.child ? context.child() : context); refresh = { status: 'succeeded', paths: [request.path] }; } catch (error) { refresh = { status: 'failed', paths: [request.path], error: this.message(error) }; }
-      const result: WriteResult = { path: request.path, status: refresh?.status === 'failed' ? 'failed' : 'applied', before_hash: beforeHash, after_hash: afterHash, refresh, ...(refresh?.status === 'failed' ? { error_code: 'INDEX_REFRESH_FAILED' as const } : {}) };
+      result = { path: request.path, status: refresh?.status === 'failed' ? 'failed' : 'applied', before_hash: beforeHash, after_hash: afterHash, refresh, ...(refresh?.status === 'failed' ? { error_code: 'INDEX_REFRESH_FAILED' as const } : {}) };
+    } catch {
+      const failedResult = this.result(request, 'failed', 'WRITE_FAILED', beforeHash);
+      try { await this.appendAudit(request, failedResult, context); } catch { /* audit of a failed write is best-effort */ }
+      return failedResult;
+    }
+
+    /* Audit failure must not masquerade as a write failure: the file is already written.
+       Report AUDIT_FAILED with the after-hash preserved so the write stays recoverable. */
+    try {
       await this.appendAudit(request, result, context);
-      return result;
-    } catch { const result = this.result(request, 'failed', 'WRITE_FAILED', beforeHash); await this.appendAudit(request, result, context); return result; }
+    } catch (error) {
+      console.error('[agent-dashboard] 审计持久化失败（目标文件已写入）。', error);
+      this.setPersistenceReady(false);
+      return { ...result, status: 'failed', error_code: 'AUDIT_FAILED' };
+    }
+    return result;
   }
   private async appendAudit(request: WriteRequest, result: WriteResult, context: RequestContext): Promise<void> { await this.audit.append({ request_id: context.request_id, actor: context.actor, action: request.kind, path: request.path, before_hash: result.before_hash, after_hash: result.after_hash, result: result.status, created_at: new Date().toISOString(), error_code: result.error_code }, context.child ? context.child() : context); }
   private result(request: WriteRequest, status: WriteResult['status'], errorCode?: WriteResult['error_code'], beforeHash = request.before_hash): WriteResult { return { path: request.path, status, before_hash: beforeHash, ...(errorCode ? { error_code: errorCode } : {}) }; }

@@ -5,6 +5,7 @@ import type {
 	TaskRecord,
 	VaultLintIssue,
 } from '../data/dashboardTypes';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 import {
 	bucketCreationDates,
 	calculateHealthScore,
@@ -30,6 +31,8 @@ export class VaultScanner {
 		const lintIssues: VaultLintIssue[] = [];
 		let frontmatterCount = 0;
 		let taggedCount = 0;
+		// 一次性构建入链计数，避免 isOrphan 对每个文件重复遍历全库链接表（O(N²)）。
+		const incomingLinks = countIncomingLinks(this.app.metadataCache.resolvedLinks);
 
 		for (const file of files) {
 			const cache = this.app.metadataCache.getFileCache(file);
@@ -41,7 +44,8 @@ export class VaultScanner {
 			}
 
 			const content = await this.app.vault.cachedRead(file);
-			const sourceDate = toDateKey(new Date(file.stat.ctime));
+			// 以修改时间作为"今日任务"的归属依据（ctime 只代表创建日，语义不符）。
+			const sourceDate = toDateKey(new Date(file.stat.mtime));
 			content.split(/\r?\n/).forEach((line, index) => {
 				const parsed = parseTaskLine(line);
 				if (parsed) {
@@ -61,7 +65,7 @@ export class VaultScanner {
 			if ((cache?.tags?.length ?? 0) === 0) {
 				reasons.push('没有标签');
 			}
-			if (this.isOrphan(file)) {
+			if (this.isOrphan(file, incomingLinks)) {
 				reasons.push('孤立笔记');
 			}
 			if (now - file.stat.mtime > 30 * DAY_IN_MILLISECONDS) {
@@ -142,7 +146,7 @@ export class VaultScanner {
 		allTasks: TaskRecord[],
 		today: string,
 	): Promise<DashboardTask[]> {
-		const dailyPath = `Daily/${today}.md`;
+		const dailyPath = `${WORKBENCH_DIRS.daily}/${today}.md`;
 		const dailyFile = this.app.vault.getAbstractFileByPath(dailyPath);
 		const sourceTasks = dailyFile instanceof TFile
 			? await this.readTasksFromFile(dailyFile, today)
@@ -176,16 +180,27 @@ export class VaultScanner {
 	}
 
 	private isInboxFile(file: TFile): boolean {
-		return file.path.startsWith('Inbox/') && file.extension === 'md';
+		return file.path.startsWith(`${WORKBENCH_DIRS.inbox}/`) && file.extension === 'md';
 	}
 
-	private isOrphan(file: TFile): boolean {
+	private isOrphan(file: TFile, incoming: Record<string, number>): boolean {
 		const outgoing = this.app.metadataCache.resolvedLinks[file.path] ?? {};
 		const unresolved = this.app.metadataCache.unresolvedLinks[file.path] ?? {};
 		const hasOutgoing = Object.keys(outgoing).length > 0 || Object.keys(unresolved).length > 0;
-		const hasIncoming = Object.values(this.app.metadataCache.resolvedLinks).some(
-			(links) => (links[file.path] ?? 0) > 0,
-		);
+		const hasIncoming = (incoming[file.path] ?? 0) > 0;
 		return !hasOutgoing && !hasIncoming;
 	}
+}
+
+/** Count incoming links per path from Obsidian's resolved links map. */
+function countIncomingLinks(
+	resolvedLinks: Record<string, Record<string, number>>,
+): Record<string, number> {
+	const incoming: Record<string, number> = {};
+	for (const links of Object.values(resolvedLinks)) {
+		for (const [path, count] of Object.entries(links)) {
+			incoming[path] = (incoming[path] ?? 0) + count;
+		}
+	}
+	return incoming;
 }

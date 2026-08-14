@@ -44,35 +44,57 @@ export class DualJsonlStorage {
 		}
 	}
 
-	/** Writes to both Vault and local dir. Returns false if either failed. */
+	/** Appends one record to both Vault and local dir. Returns false if either failed. */
 	async writeDual(content: string, context: RequestContext = createRequestContext('background-task')): Promise<boolean> {
-		let primaryOk = true;
-		let secondaryOk = true;
-		let lastError: string | undefined;
-
-		/* Primary: vault */
-		try {
-			await this.ensureVaultDir();
-			await this.app.vault.adapter.write(normalizePath(this.vaultPath), content);
-		} catch (error) {
-			primaryOk = false;
-			lastError = error instanceof Error ? error.message : 'Vault 写入失败';
-		}
-
-		/* Secondary: plugin data dir */
-		try {
-			const adapter = this.app.vault.adapter;
-			const base = this.app.vault.configDir;
-			const dir = normalizePath(`${base}/plugins/agent-dashboard`);
-			await adapter.mkdir(dir);
-			await adapter.write(normalizePath(`${dir}/${this.secondaryPath}`), content);
-		} catch (error) {
-			secondaryOk = false;
-			lastError = error instanceof Error ? error.message : '本地目录写入失败';
-		}
-
-		this.status = { primaryOk, secondaryOk, lastError };
+		const primaryOk = await this.appendTo(
+			this.vaultPath,
+			async () => { await this.ensureVaultDir(); },
+			content,
+			'Vault 写入失败',
+		);
+		const secondaryOk = await this.writeSecondary(content, context);
+		this.status = { primaryOk, secondaryOk, lastError: this.status.lastError };
 		return primaryOk && secondaryOk;
+	}
+
+	/**
+	 * Appends one record to the plugin data dir mirror only. The Vault side is
+	 * owned by the primary store (JsonlAuditStore flushes the whole file), so
+	 * writing it here would overwrite the store's history.
+	 */
+	async writeSecondary(content: string, context: RequestContext = createRequestContext('background-task')): Promise<boolean> {
+		const adapter = this.app.vault.adapter;
+		const base = this.app.vault.configDir;
+		const dir = normalizePath(`${base}/plugins/agent-dashboard`);
+		const ok = await this.appendTo(
+			normalizePath(`${dir}/${this.secondaryPath}`),
+			async () => { await adapter.mkdir(dir); },
+			content,
+			'本地目录写入失败',
+		);
+		if (!ok) {
+			this.status = { primaryOk: this.status.primaryOk, secondaryOk: false, lastError: this.status.lastError };
+		}
+		return ok;
+	}
+
+	/** Appends one JSON line to a file, preserving any existing content. */
+	private async appendTo(path: string, ensureDir: () => Promise<void>, content: string, errorLabel: string): Promise<boolean> {
+		try {
+			await ensureDir();
+			let existing = '';
+			try {
+				existing = await this.app.vault.adapter.read(path);
+			} catch {
+				/* missing file is fine: treat as empty */
+			}
+			const payload = existing.trim() ? `${existing.replace(/\s*$/, '')}\n${content}\n` : `${content}\n`;
+			await this.app.vault.adapter.write(path, payload);
+			return true;
+		} catch (error) {
+			this.status = { ...this.status, lastError: error instanceof Error ? error.message : errorLabel };
+			return false;
+		}
 	}
 
 	private async ensureVaultDir(): Promise<void> {

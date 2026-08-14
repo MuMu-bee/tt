@@ -2,6 +2,15 @@ import { requestUrl } from 'obsidian';
 import type { AgentConfig, ChatMessage, ChatReference } from '../data/dashboardTypes';
 import { VaultContextService } from './vaultContext';
 
+/**
+ * 对话服务（含 Vault 上下文注入的流式 LLM 对话）。
+ * 注意：当前版本对话页（AgentDashboardView 的「对话」页）尚未接入本服务，
+ * 发送消息实际走深度研究（AgentActionService.runDeepResearch）。接入前请勿
+ * 宣称本服务为生产对话链路。
+ */
+/** 注入 API 的最近对话条数上限。 */
+const HISTORY_WINDOW = 20;
+
 const SYSTEM_PROMPT = `你是墨忆台，住在用户 Obsidian 知识库里的私人智能助手。
 
 你的性格：像一个靠谱的朋友。说话简洁、有人味，不啰嗦。会主动关联用户之前记过的东西。
@@ -147,11 +156,15 @@ export class ChatService {
 
 		const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
-		// Try streaming first, fall back to non-streaming
+		// Try streaming first, fall back to non-streaming.
+		// 用户停止导致的 AbortError 不得降级重试：重试会重新发起一个无法再被停止的完整请求。
 		try {
 			await this.streamCloudAPI(url, apiMessages, assistantMessage);
-		} catch {
-			// If streaming fails, try non-streaming
+		} catch (error) {
+			if (isAbortError(error)) {
+				throw error;
+			}
+			// If streaming fails for another reason, try non-streaming
 			await this.nonStreamCloudAPI(url, apiMessages, assistantMessage);
 		}
 	}
@@ -323,7 +336,7 @@ export class ChatService {
 		messages.push({ role: 'system', content: systemContent });
 
 		// Conversation history (last 20 messages to keep context manageable)
-		const recentMessages = this.messages.slice(-20);
+		const recentMessages = this.messages.slice(-HISTORY_WINDOW);
 		for (const msg of recentMessages) {
 			if (msg.role === 'system') continue;
 			messages.push({ role: msg.role, content: msg.content });
@@ -345,4 +358,13 @@ export class ChatService {
 	private generateId(): string {
 		return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 	}
+}
+
+/** Detect fetch/stream aborts (DOMException in Electron, Error in Node). */
+function isAbortError(error: unknown): boolean {
+	return (
+		typeof error === 'object' &&
+		error !== null &&
+		(error as { name?: unknown }).name === 'AbortError'
+	);
 }

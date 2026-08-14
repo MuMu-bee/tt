@@ -3,6 +3,7 @@ import type { ApprovalRecord } from '../application/contracts.ts';
 import type { ApprovalStore } from '../ports/approvalPort.ts';
 import type { JsonlTextStorage } from './jsonlStorage.ts';
 import type { PersistenceRestoreReport, PersistenceStoreHealth, RestorablePersistenceStore } from '../ports/persistencePort.ts';
+import { parseJsonlLines, restoreReport, storeHealth } from './jsonl-utils.ts';
 
 /** JSONL-backed approvals, retaining the first decision for each proposal. */
 export class JsonlApprovalStore implements ApprovalStore, RestorablePersistenceStore {
@@ -18,12 +19,11 @@ export class JsonlApprovalStore implements ApprovalStore, RestorablePersistenceS
 
   async restore(context: RequestContext): Promise<PersistenceRestoreReport> {
     await this.load(context);
-    return { available: !this.restoreError, loaded: this.loaded, skipped_rows: this.skippedRows, ...(this.restoreError ? { error: this.restoreError } : {}) };
+    return restoreReport(this.loaded, this.skippedRows, this.restoreError);
   }
 
   async health(context: RequestContext): Promise<PersistenceStoreHealth> {
-    const report = await this.restore(context);
-    return { ...report, healthy: report.available && report.loaded };
+    return storeHealth(await this.restore(context));
   }
 
   async save(record: ApprovalRecord, context: RequestContext): Promise<void> {
@@ -45,14 +45,12 @@ export class JsonlApprovalStore implements ApprovalStore, RestorablePersistenceS
     this.loaded = true;
     let raw = '';
     try { raw = await this.storage.read(context); } catch (error) { this.restoreError = error instanceof Error ? error.message : 'approval restore failed'; return; }
-    for (const line of raw.split(/\r?\n/u)) {
-      if (!line.trim()) continue;
-      try {
-        const value = JSON.parse(line) as ApprovalRecord;
-        if (value.approval_id && value.proposal_id && (value.decision === 'approve' || value.decision === 'reject')) this.records.set(value.proposal_id, value);
-        else this.skippedRows += 1;
-      } catch { this.skippedRows += 1; }
-    }
+    const { records, skippedRows } = parseJsonlLines<ApprovalRecord>(raw, (value): boolean => {
+      const candidate = value as ApprovalRecord;
+      return Boolean(candidate.approval_id && candidate.proposal_id && (candidate.decision === 'approve' || candidate.decision === 'reject'));
+    });
+    for (const record of records) this.records.set(record.proposal_id, record);
+    this.skippedRows = skippedRows;
   }
 
   private async flush(context: RequestContext): Promise<void> {

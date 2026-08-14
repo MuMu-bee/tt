@@ -7,6 +7,7 @@ import {
 import { toDateKey } from './dashboardMath';
 import { CacheStore } from './cacheStore';
 import { DashboardService } from './dashboardService';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 
 export class AgentActionService {
 	private readonly writer: CacheStore;
@@ -19,11 +20,10 @@ export class AgentActionService {
 		this.writer = new CacheStore(app.vault);
 	}
 
-	async createDiary(context: RequestContext = createRequestContext()): Promise<string> {
-		void context;
+	async createDiary(_context: RequestContext = createRequestContext()): Promise<string> {
 		const date = toDateKey(new Date());
-		await this.writer.ensureFolder('Daily');
-		const path = normalizePath(`Daily/${date}.md`);
+		await this.writer.ensureFolder(WORKBENCH_DIRS.daily);
+		const path = normalizePath(`${WORKBENCH_DIRS.daily}/${date}.md`);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) {
 			return path;
@@ -43,15 +43,14 @@ export class AgentActionService {
 
 	async ingestInbox(
 		content: string,
-		context: RequestContext = createRequestContext(),
+		_context: RequestContext = createRequestContext(),
 	): Promise<string> {
-		void context;
 		const trimmed = content.trim();
 		if (!trimmed) {
 			throw new Error('请输入要导入 Inbox 的内容。');
 		}
 
-		await this.writer.ensureFolder('Inbox');
+		await this.writer.ensureFolder(WORKBENCH_DIRS.inbox);
 		const now = new Date();
 		const timestamp = [
 			String(now.getFullYear()),
@@ -63,13 +62,12 @@ export class AgentActionService {
 			String(now.getSeconds()).padStart(2, '0'),
 		].join('');
 		const title = this.sanitizeTitle(trimmed.split(/\r?\n/)[0] ?? 'inbox-note');
-		const path = normalizePath(`Inbox/${timestamp}-${title || 'inbox-note'}.md`);
+		const path = normalizePath(`${WORKBENCH_DIRS.inbox}/${timestamp}-${title || 'inbox-note'}.md`);
 		await this.writer.writeText(path, `---\ncreated: ${now.toISOString()}\ntags:\n  - inbox\n---\n\n${trimmed}\n`);
 		return path;
 	}
 
-	async runVaultLint(context: RequestContext = createRequestContext()): Promise<string> {
-		void context;
+	async runVaultLint(_context: RequestContext = createRequestContext()): Promise<string> {
 		const result = await this.dashboard.scanVault();
 		const body = [
 			`# Vault lint report`,
@@ -93,8 +91,8 @@ export class AgentActionService {
 	}
 
 	private async writeReport(fileName: string, content: string): Promise<string> {
-		await this.writer.ensureFolder('Reports');
-		const path = normalizePath(`Reports/${fileName}`);
+		await this.writer.ensureFolder(WORKBENCH_DIRS.reports);
+		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 		await this.writer.writeText(path, content.endsWith('\n') ? content : `${content}\n`);
 		return path;
 	}

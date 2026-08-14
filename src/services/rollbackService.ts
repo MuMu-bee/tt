@@ -1,4 +1,4 @@
-import { App, normalizePath } from 'obsidian';
+import { App, normalizePath, TFile } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
 import { sha256Hex } from '../utils/sha256.ts';
@@ -53,12 +53,16 @@ export class RollbackService {
 				if (entry.path !== path) continue;
 
 				/* Only rollback if current content matches the after state */
-				const current = await this.app.vault.read(this.app.vault.getAbstractFileByPath(path) as import('obsidian').TFile);
+				const target = this.app.vault.getAbstractFileByPath(path);
+				if (!(target instanceof TFile)) {
+					return { rolledBack: false, message: `找不到文件：${path}` };
+				}
+				const current = await this.app.vault.read(target);
 				if (sha256Hex(current) !== entry.after_hash) {
 					return { rolledBack: false, message: '文件已被修改，无法回滚（避免覆盖你的新内容）' };
 				}
 
-				await this.app.vault.modify(this.app.vault.getAbstractFileByPath(path) as import('obsidian').TFile, entry.before);
+				await this.app.vault.modify(target, entry.before);
 				return { rolledBack: true, message: `已回滚 ${path} 到修改前状态` };
 			}
 			return { rolledBack: false, message: `未找到 ${path} 的回滚快照` };

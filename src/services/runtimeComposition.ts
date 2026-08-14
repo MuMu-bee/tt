@@ -12,9 +12,10 @@ import { SearchService } from './searchService.ts';
 import { IndexLifecycleService } from './indexLifecycleService.ts';
 import { WriteService } from './writeService.ts';
 import { OrganizeService, type OrganizePort } from './organizeService.ts';
-import type { AuditRecord, NoteRecord, SearchScope, VaultZone } from '../application/contracts.ts';
+import type { AuditRecord, NoteRecord, SearchScope } from '../application/contracts.ts';
 import { ScopeService } from './scopeService.ts';
 import { parseVaultDocument } from '../domain/vault-document.ts';
+import { inferZone } from '../domain/zones.ts';
 import { JsonlProposalStore } from '../adapters/jsonlProposalStore.ts';
 import { JsonlApprovalStore } from '../adapters/jsonlApprovalStore.ts';
 import { JsonlAuditStore } from '../adapters/jsonlAuditStore.ts';
@@ -41,15 +42,20 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
   const proposalStore = new JsonlProposalStore(new ObsidianJsonlStorage(app, '_workbench/proposals/records.jsonl'));
   const approvalStore = new JsonlApprovalStore(new ObsidianJsonlStorage(app, '_workbench/approvals/records.jsonl'));
   const persistenceGate = new PersistenceGate(flags.new_write_pipeline);
-  /* Dual-write audit sink: writes to Vault store + plugin data dir */
+  /* Dual-write audit sink: writes to Vault store + plugin data dir mirror */
   const baseSink = new JsonlAuditSink(auditStore);
-  const write = new WriteService(writePort, {
+  const auditSink: import('../ports/auditSink.ts').AuditSink = {
     append: async (event: AuditRecord, ctx: RequestContext): Promise<void> => {
       await baseSink.append(event, ctx);
-      await auditDual.writeDual(JSON.stringify(event), ctx);
+      /* Secondary mirror only: the Vault file is owned by JsonlAuditStore. */
+      const mirrored = await auditDual.writeSecondary(JSON.stringify(event), ctx);
+      if (!mirrored) {
+        console.error('[agent-dashboard] 审计镜像（插件数据目录）写入失败，记录仍保留在 Vault 主端。', auditDual.getStatus());
+      }
     },
     query: async (filter: import('../application/contracts.ts').AuditFilter, ctx: RequestContext) => baseSink.query(filter, ctx),
-  }, lifecycle, flags, persistenceGate);
+  };
+  const write = new WriteService(writePort, auditSink, lifecycle, flags, persistenceGate);
   const scopeService = new ScopeService();
   const scanner: OrganizePort = { scan: async (scope: SearchScope, context) => {
     const notes: NoteRecord[] = [];
@@ -66,7 +72,7 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
   const proposals = new ProposalService(proposalStore);
   const approvals = new ApprovalService(proposalStore, approvalStore);
   const rollback = new RollbackService(app);
-  const apply = new ProposalApplyService(proposalStore, approvalStore, write, writePort, persistenceGate, async (path, before, after, ctx) => { await rollback.snapshot(path, before, after, ctx); });
+  const apply = new ProposalApplyService(proposalStore, approvalStore, write, writePort, persistenceGate, async (path, before, after, ctx) => { await rollback.snapshot(path, before, after, ctx); }, auditSink);
   let persistence: PersistenceRuntimeStatus = { restored: false, write_enabled: false, degraded: true, stores: { proposals: { available: false, loaded: false, skipped_rows: 0 }, approvals: { available: false, loaded: false, skipped_rows: 0 }, audit: { available: false, loaded: false, skipped_rows: 0 } } };
   const restore = async (context: RequestContext): Promise<PersistenceRuntimeStatus> => {
     persistence = await persistenceGate.restore({ proposals: proposalStore, approvals: approvalStore, audit: auditStore }, context);
@@ -83,15 +89,6 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
     },
   };
   return { reader, index, lifecycle, search, write, organize, proposals, approvals, apply, persistence, restore, audit };
-}
-
-function inferZone(path: string, frontmatter: Record<string, unknown>): VaultZone {
-  const declared = frontmatter.zone ?? frontmatter.type;
-  if (declared === 'fiction' || declared === 'unknown') return declared;
-  const normalized = path.replaceAll('\\\\', '/').toLocaleLowerCase();
-  if (normalized.startsWith('fiction/') || normalized.startsWith('小说/')) return 'fiction';
-  if (normalized.startsWith('unknown/') || normalized.startsWith('未分类/')) return 'unknown';
-  return 'normal';
 }
 
 function extractLinks(raw: string): string[] {

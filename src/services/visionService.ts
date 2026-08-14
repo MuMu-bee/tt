@@ -1,6 +1,7 @@
 import type { App } from 'obsidian';
 import type { RequestContext } from '../application/requestContext';
 import type { OpenAiModel } from '../adapters/openAiModel';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 import {
 	byteArrayToBase64,
 	mimeFromPath,
@@ -49,8 +50,8 @@ export class VisionService {
 			String(now.getSeconds()).padStart(2, '0'),
 		].join('');
 		const fileName = '图片理解-' + stamp + '.md';
-		await this.app.vault.adapter.mkdir('Reports');
-		await this.app.vault.create('Reports/' + fileName, `# 图片理解\n\n- 来源：${path}\n\n---\n\n${content}\n`);
-		return 'Reports/' + fileName;
+		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
+		await this.app.vault.create(`${WORKBENCH_DIRS.reports}/${fileName}`, `# 图片理解\n\n- 来源：${path}\n\n---\n\n${content}\n`);
+		return `${WORKBENCH_DIRS.reports}/${fileName}`;
 	}
 }

@@ -3,6 +3,7 @@ import type { AuditFilter, AuditRecord, AuditWriteStatus } from '../application/
 import type { AuditStore } from '../ports/auditStore.ts';
 import type { JsonlTextStorage } from './jsonlStorage.ts';
 import type { PersistenceRestoreReport, PersistenceStoreHealth, RestorablePersistenceStore } from '../ports/persistencePort.ts';
+import { parseJsonlLines, restoreReport, storeHealth } from './jsonl-utils.ts';
 
 /** JSONL-backed audit store with query and compensation retry support. */
 export class JsonlAuditStore implements AuditStore, RestorablePersistenceStore {
@@ -19,12 +20,11 @@ export class JsonlAuditStore implements AuditStore, RestorablePersistenceStore {
 
   async restore(context: RequestContext): Promise<PersistenceRestoreReport> {
     await this.load(context);
-    return { available: !this.restoreError, loaded: this.loaded, skipped_rows: this.skippedRows, ...(this.restoreError ? { error: this.restoreError } : {}) };
+    return restoreReport(this.loaded, this.skippedRows, this.restoreError);
   }
 
   async health(context: RequestContext): Promise<PersistenceStoreHealth> {
-    const report = await this.restore(context);
-    return { ...report, healthy: report.available && report.loaded };
+    return storeHealth(await this.restore(context));
   }
 
   async append(event: AuditRecord, context: RequestContext): Promise<AuditWriteStatus> {
@@ -75,14 +75,12 @@ export class JsonlAuditStore implements AuditStore, RestorablePersistenceStore {
     this.loaded = true;
     let raw = '';
     try { raw = await this.storage.read(context); } catch (error) { this.restoreError = error instanceof Error ? error.message : 'audit restore failed'; return; }
-    for (const line of raw.split(/\r?\n/u)) {
-      if (!line.trim()) continue;
-      try {
-        const value = JSON.parse(line) as AuditRecord;
-        if (value.audit_id && value.request_id && value.created_at) this.records.set(value.audit_id, value);
-        else this.skippedRows += 1;
-      } catch { this.skippedRows += 1; }
-    }
+    const { records, skippedRows } = parseJsonlLines<AuditRecord>(raw, (value): boolean => {
+      const candidate = value as AuditRecord;
+      return Boolean(candidate.audit_id && candidate.request_id && candidate.created_at);
+    });
+    for (const record of records) this.records.set(record.audit_id, record);
+    this.skippedRows = skippedRows;
   }
 
   private async flush(context: RequestContext): Promise<void> {

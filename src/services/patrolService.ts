@@ -12,6 +12,9 @@ export interface PatrolReport {
 	issues: string[];
 }
 
+/** 巡检报告中 issue 列表的最大样例条数。 */
+const MAX_ISSUE_SAMPLES = 10;
+
 /** Periodically patrols the vault for issues and generates reports. */
 export class PatrolService {
 	private readonly app: App;
@@ -35,12 +38,12 @@ export class PatrolService {
 
 		try {
 			/* Check for missing frontmatter */
-			const paths = await this.app.vault.getMarkdownFiles();
+			const paths = this.app.vault.getMarkdownFiles();
 			for (const file of paths) {
 				const content = await this.app.vault.read(file);
 				if (!content.startsWith('---')) {
 					report.missingFrontmatter++;
-					if (report.issues.length < 10) {
+					if (report.issues.length < MAX_ISSUE_SAMPLES) {
 						report.issues.push(`缺少 frontmatter：${file.path}`);
 					}
 				}

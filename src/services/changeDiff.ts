@@ -8,7 +8,11 @@ export function createChangeDiff(note: NoteRecord, kind: ChangeKind, options: { 
   if (kind === 'tag-add') return addTag(note.content, options.tag ?? 'organized');
   if (kind === 'bidirectional-link-add') {
     const target = options.linkTarget ?? frontmatterString(note.frontmatter, 'related');
-    return target ? addLink(note.content, target) : null;
+    if (!target) return null;
+    /* 禁止自链接：指向笔记自身标题或文件名的链接不建立任何真实关系。 */
+    const basename = (note.path.split('/').pop() ?? '').replace(/\.md$/iu, '');
+    if (target === note.title || target === basename) return null;
+    return addLink(note.content, target);
   }
   return normalizeFormat(note.content);
 }

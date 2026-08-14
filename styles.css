@@ -2045,6 +2045,10 @@
 	text-align: center;
 }
 
+.agent-dashboard-project-empty {
+	padding: 12px 0;
+}
+
 /* ===== 弹窗 ===== */
 .agent-dashboard-modal-actions {
 	display: flex;

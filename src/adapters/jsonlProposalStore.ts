@@ -3,6 +3,7 @@ import type { Proposal, ProposalFilter, ProposalStatus } from '../application/co
 import type { ProposalStore } from '../ports/proposalPort.ts';
 import type { JsonlTextStorage } from './jsonlStorage.ts';
 import type { PersistenceRestoreReport, PersistenceStoreHealth, RestorablePersistenceStore } from '../ports/persistencePort.ts';
+import { parseJsonlLines, restoreReport, storeHealth } from './jsonl-utils.ts';
 
 const TERMINAL_STATUSES: ProposalStatus[] = ['rejected', 'applied', 'conflict', 'expired'];
 
@@ -20,12 +21,11 @@ export class JsonlProposalStore implements ProposalStore, RestorablePersistenceS
 
   async restore(context: RequestContext): Promise<PersistenceRestoreReport> {
     await this.load(context);
-    return { available: !this.restoreError, loaded: this.loaded, skipped_rows: this.skippedRows, ...(this.restoreError ? { error: this.restoreError } : {}) };
+    return restoreReport(this.loaded, this.skippedRows, this.restoreError);
   }
 
   async health(context: RequestContext): Promise<PersistenceStoreHealth> {
-    const report = await this.restore(context);
-    return { ...report, healthy: report.available && report.loaded };
+    return storeHealth(await this.restore(context));
   }
 
   async save(proposal: Proposal, context: RequestContext): Promise<void> {
@@ -66,14 +66,12 @@ export class JsonlProposalStore implements ProposalStore, RestorablePersistenceS
     this.loaded = true;
     let raw = '';
     try { raw = await this.storage.read(context); } catch (error) { this.restoreError = error instanceof Error ? error.message : 'proposal restore failed'; return; }
-    for (const line of raw.split(/\r?\n/u)) {
-      if (!line.trim()) continue;
-      try {
-        const value = JSON.parse(line) as Proposal;
-        if (value.proposal_id && Number.isInteger(value.schema_version)) this.records.set(value.proposal_id, value);
-        else this.skippedRows += 1;
-      } catch { this.skippedRows += 1; }
-    }
+    const { records, skippedRows } = parseJsonlLines<Proposal>(raw, (value): boolean => {
+      const candidate = value as Proposal;
+      return Boolean(candidate.proposal_id && Number.isInteger(candidate.schema_version));
+    });
+    for (const record of records) this.records.set(record.proposal_id, record);
+    this.skippedRows = skippedRows;
   }
 
   private async flush(context: RequestContext): Promise<void> {

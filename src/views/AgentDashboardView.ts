@@ -7,7 +7,7 @@ import type {
 	RepoSnapshot,
 	TaskStatus,
 } from '../data/dashboardTypes';
-import { DASHBOARD_ACTIONS } from '../data/dashboardTypes';
+import { DASHBOARD_ACTIONS, WORKBENCH_DIRS } from '../data/dashboardTypes';
 import { AgentActionService, showActionError } from '../services/agentActionService';
 import { DashboardService } from '../services/dashboardService';
 import { ProjectTracker } from '../services/projectTracker';
@@ -15,6 +15,7 @@ import { ProjectReportService } from '../services/projectReportService';
 import {
 	formatDashboardActionMessage,
 	matchesDashboardQuery,
+	toDateKey,
 } from '../services/dashboardMath';
 import { InboxIngestModal } from '../ui/InboxIngestModal';
 import { ImageUnderstandModal } from '../ui/ImageUnderstandModal';
@@ -775,7 +776,7 @@ private setWorkbenchStatus(message: string): void {
 	private renderOverviewGrid(parent: HTMLElement, data: DashboardData): void {
 		const graphData = this.lifecycle.getGraphData();
 		const nodeCount = graphData.stats.nodeCount || data.vaultHealth.noteCount;
-		const edgeCount = graphData.stats.edgeCount || Math.floor(nodeCount * 0.4);
+		const edgeCount = graphData.stats.edgeCount;
 
 		const grid = parent.createDiv({ cls: 'agent-dashboard-overview-grid' });
 
@@ -798,66 +799,52 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 			this.activeViewLabelEl?.setText('知识星图');
 		});
 
-		/* 最近更新 */
+		/* 最近更新（真实数据：按修改时间取最近 3 篇） */
 		const recentCard = leftStack.createEl('section', { cls: 'agent-dashboard-surface' });
 		const recentHeader = recentCard.createDiv({ cls: 'agent-dashboard-surface-header' });
 		recentHeader.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'RECENT' });
 		recentHeader.createEl('h2', { text: '最近更新' });
 		const recentList = recentCard.createDiv({ cls: 'agent-dashboard-recent-list' });
-		[
-			{ title: 'DeepTutor 研究笔记', section: 'Wiki', time: '今天' },
-			{ title: '读书心得 2026-08', section: 'Raw', time: '昨天' },
-			{ title: '工作台架构设计', section: 'Wiki', time: '3天前' },
-].forEach((item) => {
+		const recentFiles = this.app.vault.getMarkdownFiles()
+			.sort((a, b) => b.stat.mtime - a.stat.mtime)
+			.slice(0, 3);
+		if (recentFiles.length === 0) {
+			recentList.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无笔记。' });
+		} else {
+			recentFiles.forEach((file) => {
 				const row = recentList.createDiv({ cls: 'agent-dashboard-recent-item' });
-				const dot = row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-recent-dot', attr: { 'aria-hidden': 'true' } });
-			row.createSpan({ cls: 'agent-dashboard-recent-item__title', text: item.title });
-			row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: item.section });
-			row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: item.time });
-		});
+				row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-recent-dot', attr: { 'aria-hidden': 'true' } });
+				row.createSpan({ cls: 'agent-dashboard-recent-item__title', text: file.basename });
+				row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: file.parent?.path ?? '/' });
+				row.createSpan({ cls: 'agent-dashboard-recent-item__meta', text: this.formatDate(new Date(file.stat.mtime)) });
+			});
+		}
 
 		/* ===== 右栏 ===== */
 		const rightStack = grid.createDiv({ cls: 'agent-dashboard-overview-stack' });
 
-		/* 生产动态 */
+		/* 生产动态（暂无真实数据源，诚实空态） */
 		const pipelineCard = rightStack.createEl('section', { cls: 'agent-dashboard-surface' });
 		const pipelineHeader = pipelineCard.createDiv({ cls: 'agent-dashboard-surface-header' });
 		const pipelineHeading = pipelineHeader.createDiv();
 		pipelineHeading.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'PIPELINE' });
 		pipelineHeading.createEl('h2', { text: '生产动态' });
 		const pipelineBody = pipelineCard.createDiv({ cls: 'agent-dashboard-pipeline' });
-		[
-			{ title: 'DeepTutor 技术分析', stage: '已发布', accent: true },
-			{ title: 'Obsidian 插件开发指南', stage: '素材验证', accent: true },
-			{ title: 'AI 工作台对比报告', stage: '候选', accent: false },
-].forEach((item) => {
-				const row = pipelineBody.createDiv({ cls: 'agent-dashboard-pipeline__row' });
-				const dot = row.createSpan({
-					cls: 'agent-dashboard-status-dot agent-dashboard-pipeline-dot',
-					attr: { 'aria-hidden': 'true' },
-				});
-				if (item.accent) {
-					dot.setCssProps({ '--pipeline-dot-color': 'var(--color-green)', '--pipeline-dot-shadow': 'var(--background-modifier-hover)' });
-				} else {
-					dot.setCssProps({ '--pipeline-dot-color': 'var(--text-faint)', '--pipeline-dot-shadow': 'transparent' });
-				}
-			row.createSpan({ cls: 'agent-dashboard-pipeline__title', text: item.title });
-			row.createSpan({ cls: 'agent-dashboard-pipeline__stage', text: item.stage });
-		});
+		pipelineBody.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无生产动态。' });
 
-		/* 知识层健康度 */
+		/* 知识层健康度（真实数据：来自知识图谱统计） */
 		const wikiCard = rightStack.createEl('section', { cls: 'agent-dashboard-surface' });
 		const wikiHeader = wikiCard.createDiv({ cls: 'agent-dashboard-surface-header' });
 		wikiHeader.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'WIKI STATUS' });
 		wikiHeader.createEl('h2', { text: '知识层健康度' });
 		const wikiBody = wikiCard.createDiv({ cls: 'agent-dashboard-pipeline' });
 		[
-			{ label: '活跃', count: 42, color: 'var(--color-green)' },
-			{ label: '待复核', count: 8, color: 'var(--color-orange)' },
-			{ label: '已弃用', count: 3, color: 'var(--text-faint)' },
+			{ label: '图谱节点', count: graphData.stats.nodeCount, color: 'var(--color-green)' },
+			{ label: '双向链接', count: graphData.stats.edgeCount, color: 'var(--color-orange)' },
+			{ label: '孤立节点', count: graphData.stats.isolatedCount, color: 'var(--text-faint)' },
 		].forEach((item) => {
 			const row = wikiBody.createDiv({ cls: 'agent-dashboard-pipeline__row' });
-const dot = row.createSpan({
+			const dot = row.createSpan({
 					cls: 'agent-dashboard-status-dot agent-dashboard-pipeline-dot',
 					attr: { 'aria-hidden': 'true' },
 				});
@@ -881,11 +868,11 @@ const dot = row.createSpan({
 		const items = [
 			{ label: '索引状态', value: lifecycleState.status === 'ready' ? `就绪 · ${lifecycleState.count} 篇` : lifecycleState.status === 'rebuilding' ? '重建中' : '失败', ok: lifecycleState.status === 'ready' },
 			{ label: '持久化', value: this.persistence.degraded ? '降级' : this.persistence.restored ? '就绪' : '未恢复', ok: !this.persistence.degraded && this.persistence.restored },
-			{ label: '项目追踪', value: 'HKUDS/DeepTutor', ok: true },
+			{ label: '项目追踪', value: this.projectTracker.getRepos().length > 0 ? this.projectTracker.getRepos().join(', ') : '未配置', ok: this.projectTracker.getRepos().length > 0 },
 		];
 		items.forEach((item) => {
 			const row = statusEl.createDiv({ cls: 'agent-dashboard-health-row' });
-			const dot = row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-health-dot', attr: { style: `background:${item.ok ? 'var(--color-green)' : 'var(--color-orange)'};box-shadow:0 0 0 3px var(--background-modifier-hover);` } });
+			row.createSpan({ cls: 'agent-dashboard-status-dot agent-dashboard-health-dot', attr: { style: `background:${item.ok ? 'var(--color-green)' : 'var(--color-orange)'};box-shadow:0 0 0 3px var(--background-modifier-hover);` } });
 			row.createSpan({ cls: 'agent-dashboard-health-label', text: item.label });
 			row.createSpan({ cls: 'agent-dashboard-health-value', text: item.value });
 		});
@@ -915,10 +902,10 @@ const dot = row.createSpan({
 		});
 	}
 
-private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
+	private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		const graphData = this.lifecycle.getGraphData();
 		const nodeCount = graphData.stats.nodeCount || _data.vaultHealth.noteCount;
-		const edgeCount = graphData.stats.edgeCount || Math.floor(nodeCount * 0.4);
+		const edgeCount = graphData.stats.edgeCount;
 		const isolatedCount = graphData.stats.isolatedCount || 0;
 
 		const shell = parent.createDiv({ cls: 'agent-dashboard-graph-page-shell' });
@@ -927,7 +914,7 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		const headerText = header.createDiv();
 		headerText.createSpan({ cls: 'agent-dashboard-eyebrow', text: 'KNOWLEDGE GRAPH' });
 		headerText.createEl('h1', { text: '知识星图' });
-		headerText.createEl('p', { text: '探索笔记之间的关联关系：悬浮查看关系，点击聚焦邻居，双击进入文档。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		headerText.createEl('p', { text: '图谱可视化渲染开发中：当前展示笔记间真实链接的统计数据。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
 		header.createSpan({ text: `LIVE VAULT · ${new Date().toISOString().slice(0, 10)}`, cls: 'agent-dashboard-graph-header__meta', attr: { style: 'font-size:12px;color:var(--text-muted);font-family:var(--font-monospace);' } });
 
 		const container = shell.createDiv({ cls: 'agent-dashboard-graph-container' });
@@ -938,9 +925,12 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		search.createEl('input', { attr: { type: 'search', placeholder: `搜索 ${nodeCount} 个知识页…`, 'aria-label': '搜索图谱节点' } });
 		search.createEl('kbd', { text: '/' });
 
-		/* Canvas */
-		const canvas = container.createEl('canvas', { attr: { height: '500' } });
+		/* Canvas 渲染尚未实现：显示占位文案，隐藏空 canvas */
+		const canvasWrap = container.createDiv({ cls: 'agent-dashboard-graph-canvas-wrap' });
+		canvasWrap.createDiv({ cls: 'agent-dashboard-empty-state', text: '图谱可视化渲染开发中，当前仅提供链接统计。' });
+		const canvas = canvasWrap.createEl('canvas', { attr: { height: '500' } });
 		canvas.id = 'agent-dashboard-graph-canvas';
+		canvas.hidden = true;
 
 		/* 底部统计 */
 		const stats = container.createDiv({ cls: 'agent-dashboard-graph-stats' });
@@ -983,7 +973,7 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		refreshBtn.createSpan({ text: '刷新热点' });
 
 		const grid = section.createDiv({ cls: 'agent-dashboard-hot-grid' });
-		const loadingEl = grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
+		grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
 
 		const renderCards = (items: Array<{ rank: number; title: string; desc: string; category: string; source: string; heat: string; detail: string }>) => {
 			grid.empty();
@@ -1026,20 +1016,24 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 			grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
 			try {
 				const resp = await requestUrl({ url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists', method: 'GET', headers: { 'User-Agent': 'Mozilla/5.0' } });
-				if (resp.status === 200 && resp.json?.data) {
-					const apiItems = resp.json.data.slice(0, 6).map((item: Record<string, unknown>, i: number) => ({
-						rank: i + 1,
-						title: (item.target as Record<string, unknown>)?.title as string ?? '热点',
-						desc: (item.target as Record<string, unknown>)?.excerpt ?? ((item.target as Record<string, unknown>)?.titleArea as Record<string, unknown>)?.text as string ?? '',
-						category: (item.feedSpecific as Record<string, unknown>)?.currentType ?? '热点',
-						source: '知乎',
-						heat: `${((item.detailText as string) ?? '').replace(/[^0-9]/g, '') || Math.floor(Math.random() * 10000)} 热度`,
-						detail: (item.target as Record<string, unknown>)?.excerpt as string ?? '点击查看详情',
-					}));
-					renderCards(apiItems);
-				} else {
-					renderCards(mockData);
+				const hotItems: Array<{ rank: number; title: string; desc: string; category: string; source: string; heat: string; detail: string }> = [];
+				if (resp.status === 200 && isRecord(resp.json) && Array.isArray(resp.json.data)) {
+					resp.json.data.slice(0, 6).forEach((item: unknown, i: number) => {
+						if (!isRecord(item)) return;
+						const target = isRecord(item.target) ? item.target : undefined;
+						const feedSpecific = isRecord(item.feedSpecific) ? item.feedSpecific : undefined;
+						hotItems.push({
+							rank: i + 1,
+							title: typeof target?.title === 'string' ? target.title : '热点',
+							desc: typeof target?.excerpt === 'string' ? target.excerpt : (isRecord(target?.titleArea) && typeof target.titleArea.text === 'string' ? target.titleArea.text : ''),
+							category: typeof feedSpecific?.currentType === 'string' ? feedSpecific.currentType : '热点',
+							source: '知乎',
+							heat: `${(typeof item.detailText === 'string' ? item.detailText.replace(/[^0-9]/g, '') : '') || '—'} 热度`,
+							detail: typeof target?.excerpt === 'string' ? target.excerpt : '点击查看详情',
+						});
+					});
 				}
+				renderCards(hotItems.length > 0 ? hotItems : mockData);
 			} catch {
 				renderCards(mockData);
 			} finally {
@@ -1090,8 +1084,15 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 
 		try {
 			const taskId = await this.researchService.submit(query, createRequestContext('user'));
-			/* 等待任务完成 */
-			await new Promise((resolve) => setTimeout(resolve, 3000));
+			/* 轮询任务状态直到终态（上限 60 秒），代替固定等待 */
+			const deadline = Date.now() + 60_000;
+			while (Date.now() < deadline) {
+				const task = await this.researchService.getStatus(taskId, createRequestContext('user'));
+				if (!task || task.status === 'completed' || task.status === 'failed' || task.status === 'cancelled') {
+					break;
+				}
+				await new Promise((resolve) => setTimeout(resolve, 500));
+			}
 			await this.loadResearchTasks(taskList);
 		} catch (error) {
 			new Notice(`研究失败：${this.getErrorMessage(error)}`);
@@ -1135,7 +1136,7 @@ private renderGraphPage(parent: HTMLElement, _data: DashboardData): void {
 		const header = card.createDiv({ cls: 'agent-dashboard-surface-header' });
 		header.createSpan({ cls: 'agent-dashboard-eyebrow', text: '💬 CHAT' });
 		header.createEl('h2', { text: '对话' });
-		header.createEl('p', { text: '向 AI 提问，助手会根据你的 Vault 知识回答问题。' });
+		header.createEl('p', { text: '对话功能开发中：当前发送消息会生成一篇深度研究报告，尚未接入实时对话。' });
 
 		/* 消息列表 */
 		const messageList = card.createDiv({ cls: 'agent-dashboard-chat-messages' });
@@ -1320,7 +1321,7 @@ this.registerDomEvent(button, 'click', () => {
 		const copy = welcome.createDiv();
 		copy.createSpan({ cls: 'agent-dashboard-date-label', text: this.formatDate(new Date()) });
 		const welcomeTitle = copy.createEl('h1', { attr: { id: 'agent-dashboard-welcome-title' } });
-		welcomeTitle.setText(`早上好，${DISPLAY_NAME}`);
+		welcomeTitle.setText(`${this.greeting()}，${DISPLAY_NAME}`);
 		copy.createEl('p', { text: '这里是你的智能体工作概览。今天专注于最重要的事。' });
 
 		const status = welcome.createDiv({ cls: 'agent-dashboard-quiet-status' });
@@ -1466,7 +1467,7 @@ this.registerDomEvent(button, 'click', () => {
 			const date = new Date(gridStart);
 			date.setDate(gridStart.getDate() + index);
 			const inRange = date >= start && date <= end;
-			const dateKey = this.toDateKey(date);
+			const dateKey = toDateKey(date);
 			const count = inRange ? (data.heatmap.counts[dateKey] ?? 0) : 0;
 			const level = inRange ? this.heatLevel(count, maxCount) : 0;
 			const label = inRange
@@ -1667,8 +1668,7 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(release.url); });
 				});
 			} else {
-				const empty = card.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无版本发布记录' });
-				empty.style.padding = '12px 0';
+				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无版本发布记录' });
 			}
 		}
 
@@ -1698,8 +1698,8 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 		}
 		const date = new Date();
 		const fileName = `项目动态-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
-		await this.app.vault.adapter.mkdir('Reports');
-		const path = normalizePath(`Reports/${fileName}`);
+		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
+		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 		await this.app.vault.create(path, parts.join('\n\n---\n\n') + '\n');
 		return path;
 	}
@@ -1810,12 +1810,7 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 	}
 
 	private async openTaskSource(task: DashboardTask): Promise<void> {
-		const file = this.app.vault.getAbstractFileByPath(task.sourcePath);
-		if (!(file instanceof TFile)) {
-			this.setFeedback(`找不到任务来源：${task.sourcePath}`);
-			return;
-		}
-		await this.app.workspace.getLeaf('tab').openFile(file);
+		await this.openNote(task.sourcePath);
 	}
 
 	private renderEmptyState(parent: HTMLElement, message: string): void {
@@ -1883,13 +1878,6 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 		return new Date(`${value}T00:00:00`);
 	}
 
-	private toDateKey(date: Date): string {
-		const year = date.getFullYear();
-		const month = String(date.getMonth() + 1).padStart(2, '0');
-		const day = String(date.getDate()).padStart(2, '0');
-		return `${year}-${month}-${day}`;
-	}
-
 	private formatDate(date: Date): string {
 		return date.toLocaleDateString('zh-CN', {
 			year: 'numeric',
@@ -1945,4 +1933,16 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 	private getErrorMessage(error: unknown): string {
 		return error instanceof Error ? error.message : '未知错误';
 	}
+
+	/** 按当前小时返回问候语（5-11 早上好 / 12-17 下午好 / 其他 晚上好）。 */
+	private greeting(): string {
+		const hour = new Date().getHours();
+		if (hour >= 5 && hour < 12) return '早上好';
+		if (hour >= 12 && hour < 18) return '下午好';
+		return '晚上好';
+	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }

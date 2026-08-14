@@ -2,6 +2,9 @@ import { App, TFile } from 'obsidian';
 import type { ChatReference } from '../data/dashboardTypes';
 import type { SearchService } from './searchService';
 
+/** 粗估换算：1 token ≈ 3 字符。 */
+const TOKENS_TO_CHARS_FACTOR = 3;
+
 /**
  * Vault context injection: search vault for notes relevant to a query,
  * read their content, and assemble a context string for the LLM.
@@ -60,7 +63,7 @@ export class VaultContextService {
 
 		const parts: string[] = ['以下是 Vault 中与用户问题相关的笔记内容：\n'];
 		let totalLength = 0;
-		const charLimit = maxTokens * 3; // rough approximation: 1 token ≈ 3 chars
+		const charLimit = maxTokens * TOKENS_TO_CHARS_FACTOR;
 
 		for (const ref of references) {
 			const part = `【${ref.title}】(${ref.path})\n${ref.snippet}\n`;

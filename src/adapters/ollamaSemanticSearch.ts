@@ -5,6 +5,7 @@ import {
 	createRequestContext,
 	type RequestContext,
 } from '../application/requestContext.ts';
+import { allowsPath } from '../application/scopeUtils.ts';
 import type {
 	Health,
 	SearchQuery,
@@ -158,28 +159,8 @@ export class OllamaSemanticSearch implements SemanticSearchPort {
 	}
 
 	private allowsScope(path: string, scope?: SearchScope): boolean {
-		if (!scope) {
-			return true;
-		}
-		const normalizedPath = path.replaceAll('\\', '/');
-		const matches = (value: string): boolean => {
-			const normalizedValue = value.replaceAll('\\', '/').replace(/\/$/u, '');
-			return normalizedPath === normalizedValue || normalizedPath.startsWith(`${normalizedValue}/`);
-		};
-		if (scope.excludes?.some((value) => matches(value))) {
-			return false;
-		}
-		if (scope.kind === 'global') {
-			return true;
-		}
-		if (scope.kind === 'file') {
-			return normalizedPath === (scope.value ?? '').replaceAll('\\', '/');
-		}
-		if (scope.kind === 'prefix') {
-			return normalizedPath.startsWith((scope.value ?? '').replaceAll('\\', '/'));
-		}
-		// tag scoping is applied on the keyword side; keep semantic hits visible
-		return true;
+		// tag 过滤在关键词侧执行；语义侧保持路径级检查一致。
+		return allowsPath(path, scope);
 	}
 }
 

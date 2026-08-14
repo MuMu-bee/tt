@@ -1,8 +1,6 @@
 /**
  * Pure vector math helpers for semantic search.
- *
- * This module MUST stay free of any obsidian import so it can run under
- * `node --experimental-strip-types` in the test suite.
+ * 注意：保持无 obsidian 依赖，以便在 node --experimental-strip-types 下测试。
  */
 
 /** L2-normalizes a vector in place of allocation; returns a new array. */

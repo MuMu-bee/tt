@@ -92,7 +92,7 @@ test('failed staged build preserves entries and ready availability', async () =>
 	}, 1);
 	await index.rebuild(context);
 	shouldFail = true;
-	await assert.rejects(index.buildAll([{ path: 'b.md', title: 'Beta', frontmatter: {}, tags: [], body: 'replacement', raw: 'replacement', raw_hash: 'hash' }], context), /yield failed/);
+	await assert.rejects(index.buildAll([{ path: 'b.md', title: 'Beta', frontmatter: {}, tags: [], links: [], body: 'replacement', raw: 'replacement', raw_hash: 'hash' }], context), /yield failed/);
 	assert.equal(index.availability(), 'ready');
 	assert.equal((await index.search('legacy', context)).length, 1);
 	assert.deepEqual(await index.search('replacement', context), []);

@@ -2,10 +2,7 @@ import type { AgentConfig } from '../data/dashboardTypes';
 
 /**
  * Pure helpers for image understanding via a cloud vision model.
- *
- * This module MUST stay free of any obsidian import so it can run under
- * `node --experimental-strip-types` in the test suite. It builds OpenAI-style
- * multimodal request bodies and converts image bytes to base64 data URIs.
+ * 注意：保持无 obsidian 依赖，以便在 node --experimental-strip-types 下测试。
  */
 
 export interface VisionCompletionRequest {

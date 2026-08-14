@@ -7,6 +7,8 @@ export interface MemorySnapshot {
 	publishedAt: string;
 	noteCount: number;
 	paths: string[];
+	/** Set when the version has been rolled back. */
+	rolledBackAt?: string;
 }
 
 export interface HermesAdapter {
@@ -49,7 +51,7 @@ export class MemoryPublishService implements HermesAdapter {
 		try {
 			const content = await this.app.vault.adapter.read(path);
 			const snapshot = JSON.parse(content) as MemorySnapshot;
-			(snapshot as unknown as Record<string, unknown>).rolledBackAt = new Date().toISOString();
+			snapshot.rolledBackAt = new Date().toISOString();
 			await this.app.vault.adapter.write(path, JSON.stringify(snapshot, null, 2));
 		} catch {
 			throw new Error(`无法回滚版本 ${version}：快照不存在`);

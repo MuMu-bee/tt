@@ -1,10 +1,16 @@
 import { App, requestUrl, normalizePath } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
-import type { ResearchPort, ResearchTask, ResearchTaskStatus, ResearchResult, ResearchSource } from '../ports/researchPort.ts';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes.ts';
+import type { ResearchPort, ResearchTask, ResearchSource } from '../ports/researchPort.ts';
 
 const SEARCH_API = 'https://api.duckduckgo.com/?q=%s&format=json&no_html=1';
-const TASKS_DIR = '_workbench/research/';
+/** 生成报告文件名时查询词截断长度。 */
+const FILENAME_QUERY_SLICE = 20;
+/** 提交的研究查询最大长度。 */
+const MAX_QUERY_LENGTH = 2000;
+/** 内存中保留的研究任务上限，超出后清理最老的终态任务。 */
+const MAX_TASKS = 100;
 
 /* Sensitive patterns to detect before outbound requests */
 const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
@@ -25,9 +31,21 @@ export class ResearchService implements ResearchPort {
 	}
 
 	async submit(query: string, context: RequestContext = createRequestContext('user')): Promise<string> {
+		const trimmed = query.trim();
+		if (!trimmed) throw new Error('研究主题不能为空');
+		if (trimmed.length > MAX_QUERY_LENGTH) throw new Error(`研究主题过长（上限 ${MAX_QUERY_LENGTH} 字符）`);
 		const taskId = `research-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-		const task: ResearchTask = { taskId, query, status: 'queued', createdAt: new Date().toISOString() };
+		const task: ResearchTask = { taskId, query: trimmed, status: 'queued', createdAt: new Date().toISOString() };
 		this.tasks.set(taskId, task);
+
+		/* 防止任务 Map 无限增长：超过上限时清理最老的终态任务。 */
+		if (this.tasks.size > MAX_TASKS) {
+			const terminal = [...this.tasks.entries()]
+				.filter(([, t]) => t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+				.sort((a, b) => a[1].createdAt.localeCompare(b[1].createdAt));
+			const toRemove = terminal.slice(0, this.tasks.size - MAX_TASKS);
+			for (const [id] of toRemove) this.tasks.delete(id);
+		}
 
 		/* Run asynchronously */
 		this.runTask(task, context).catch(() => { /* errors handled in runTask */ });
@@ -67,18 +85,19 @@ export class ResearchService implements ResearchPort {
 			const response = await this.requestUrl({ url: searchUrl, method: 'GET' });
 
 			if (response.status === 200) {
-				const data = response.json;
-				if (data.RelatedTopics && Array.isArray(data.RelatedTopics)) {
-					data.RelatedTopics.slice(0, 5).forEach((topic: Record<string, unknown>) => {
-						if (topic.Text && topic.FirstURL) {
-							sources.push({
-								url: topic.FirstURL as string,
-								title: (topic.Text as string).split(' - ')[0] ?? topic.Text as string,
-								snippet: topic.Text as string,
-								fetchedAt: new Date().toISOString(),
-								provider: 'DuckDuckGo',
-							});
+				const data: unknown = response.json;
+				if (isRecord(data) && Array.isArray(data.RelatedTopics)) {
+					data.RelatedTopics.slice(0, 5).forEach((topic: unknown) => {
+						if (!isRecord(topic) || typeof topic.Text !== 'string' || typeof topic.FirstURL !== 'string') {
+							return;
 						}
+						sources.push({
+							url: topic.FirstURL,
+							title: topic.Text.split(' - ')[0] ?? topic.Text,
+							snippet: topic.Text,
+							fetchedAt: new Date().toISOString(),
+							provider: 'DuckDuckGo',
+						});
 					});
 				}
 			}
@@ -90,10 +109,10 @@ export class ResearchService implements ResearchPort {
 
 			/* Save results as vault note */
 			const date = new Date();
-			const fileName = `研究-${task.query.slice(0, 20).replace(/[\/\\?*\[\]]/g, '_')}-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
+			const fileName = `研究-${task.query.slice(0, FILENAME_QUERY_SLICE).replace(/[\\?*[\]]/g, '_')}-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
 			const content = this.formatReport(task.query, summary, sources);
-			await this.app.vault.adapter.mkdir('Reports');
-			const reportPath = normalizePath(`Reports/${fileName}`);
+			await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
+			const reportPath = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 			await this.app.vault.create(reportPath, content);
 
 			task.result = { summary, sources, reportPath };
@@ -129,4 +148,8 @@ export class ResearchService implements ResearchPort {
 		lines.push('*由墨忆台自动生成*');
 		return lines.join('\n');
 	}
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
 }
