@@ -1690,6 +1690,35 @@
 	margin: 4px 0 2px;
 }
 
+.agent-dashboard-project-summary {
+	margin-top: 10px;
+	padding: 10px 12px;
+	border: 1px solid var(--background-modifier-border);
+	border-radius: 10px;
+	background: var(--background-primary-alt);
+}
+
+.agent-dashboard-project-summary .agent-dashboard-project-label {
+	margin: 0 0 6px;
+	border-bottom: 0;
+	padding-bottom: 0;
+}
+
+.agent-dashboard-project-summary-body {
+	font-size: 12px;
+	line-height: 1.6;
+	color: var(--text-normal);
+	white-space: pre-wrap;
+}
+
+.agent-dashboard-project-tag.is-open {
+	color: var(--color-green);
+}
+
+.agent-dashboard-project-tag.is-closed {
+	color: var(--text-faint);
+}
+
 .agent-dashboard-project-label {
 	display: block;
 	font-size: 10px;

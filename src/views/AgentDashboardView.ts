@@ -136,6 +136,10 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private workbenchToken = 0;
 	private organizeBusy = false;
 	private chatMessagesEl: HTMLElement | null = null;
+	/** 项目追踪：AI 中文摘要的会话内缓存（按仓库名）。 */
+	private projectSummaryCache = new Map<string, string>();
+	/** 知识星图 canvas 的刷新回调：切换到星图页时重新布局（页面隐藏时初始化会得到 0 尺寸）。 */
+	private graphRefreshCallback: (() => void) | null = null;
 
 constructor(
 			leaf: WorkspaceLeaf,
@@ -199,6 +203,7 @@ constructor(
 	protected onClose(): Promise<void> {
 		this.isClosed = true;
 		this.lifecycleToken += 1;
+		this.graphRefreshCallback = null;
 		this.clearRefreshTimer();
 		this.refreshPromise = null;
 		this.contentEl.empty();
@@ -505,6 +510,9 @@ this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-ba
 			const plan = await this.organize.plan({ kind: 'global' }, context);
 			const created = await this.proposals.createFromPlan(plan, context);
 			this.setWorkbenchStatus(`已生成 ${created.length} 条整理方案`);
+			if (created.length === 0) {
+				this.setWorkbenchError('没有发现需要整理的笔记：请在设置中开启更多整理开关（如「补充标签」），或新建一篇没有 frontmatter/标签的笔记后再试。');
+			}
 			await this.refreshWorkbench();
 		} catch (error) {
 			this.setWorkbenchStatus('生成整理计划失败');
@@ -1002,24 +1010,32 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		const positions = new Map<string, { x: number; y: number; vx: number; vy: number; r: number }>();
 		const width = (): number => container.clientWidth;
 		const height = (): number => container.clientHeight;
-		const area = nodes.length > 0 ? Math.sqrt((width() * height()) / nodes.length) : 80;
+		let initialized = false;
+		let area = 80;
 
-		nodes.forEach((node, index) => {
-			const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
-			const radius = Math.min(width(), height()) * 0.35 * (0.6 + 0.4 * Math.random());
-			positions.set(node.id, {
-				x: width() / 2 + Math.cos(angle) * radius,
-				y: height() / 2 + Math.sin(angle) * radius,
-				vx: 0,
-				vy: 0,
-				r: Math.max(5, Math.min(16, 6 + Math.sqrt(node.degree) * 2)),
+		/* 惰性初始化：页面隐藏时容器尺寸为 0，必须等容器可见后再布局，否则节点全部挤在原点。 */
+		const initializePositions = (): void => {
+			if (positions.size > 0) return;
+			const w = Math.max(1, width());
+			const h = Math.max(1, height());
+			area = nodes.length > 0 ? Math.sqrt((w * h) / nodes.length) : 80;
+			nodes.forEach((node, index) => {
+				const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
+				const radius = Math.min(w, h) * 0.35 * (0.6 + 0.4 * Math.random());
+				positions.set(node.id, {
+					x: w / 2 + Math.cos(angle) * radius,
+					y: h / 2 + Math.sin(angle) * radius,
+					vx: 0,
+					vy: 0,
+					r: Math.max(5, Math.min(16, 6 + Math.sqrt(node.degree) * 2)),
+				});
 			});
-		});
+		};
 
 		const DPR = window.devicePixelRatio || 1;
 		const resize = (): void => {
-			canvas.width = Math.max(1, Math.floor(width() * DPR));
-			canvas.height = Math.max(1, Math.floor(height() * DPR));
+			canvas.width = Math.max(1, Math.floor(Math.max(1, width()) * DPR));
+			canvas.height = Math.max(1, Math.floor(Math.max(1, height()) * DPR));
 			ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 		};
 		resize();
@@ -1133,6 +1149,17 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 				if (animationFrame) window.cancelAnimationFrame(animationFrame);
 				return;
 			}
+			if (!initialized) {
+				if (width() === 0 || height() === 0) {
+					/* 容器尚不可见（页面被隐藏），等待下一帧再初始化 */
+					animationFrame = window.requestAnimationFrame(loop);
+					return;
+				}
+				resize();
+				initializePositions();
+				initialized = true;
+				iterations = 0;
+			}
 			if (iterations < 200 || dragId !== null) {
 				step();
 				iterations += 1;
@@ -1143,6 +1170,17 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 			}
 		};
 		loop();
+
+		/* 每次切换到星图页时重新测量并重排（容器从 hidden 变为可见） */
+		this.graphRefreshCallback = (): void => {
+			resize();
+			if (initialized) {
+				positions.clear();
+				initializePositions();
+				iterations = 0;
+				loop();
+			}
+		};
 
 		const toLocal = (event: PointerEvent): { x: number; y: number } => {
 			const rect = canvas.getBoundingClientRect();
@@ -1251,12 +1289,50 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 	}
 
 	private async fetchHotItems(): Promise<HotItem[] | null> {
+		/* 多源轮换：先试 vvhan 聚合（返回即用），再试知乎热榜，全部失败返回 null */
+		const vvhan = await this.fetchVvhanHot();
+		if (vvhan) return vvhan;
+		return this.fetchZhihuHot();
+	}
+
+	private async fetchVvhanHot(): Promise<HotItem[] | null> {
+		try {
+			const resp = await requestUrl({
+				url: 'https://api.vvhan.com/api/hotlist?type=all',
+				method: 'GET',
+				headers: { 'User-Agent': 'Mozilla/5.0' },
+				timeout: 10000,
+			} as Parameters<typeof requestUrl>[0] & { timeout?: number });
+			if (resp.status !== 200) return null;
+			const payload: unknown = resp.json;
+			if (!isRecord(payload) || !Array.isArray(payload.data)) return null;
+			const items: HotItem[] = [];
+			payload.data.slice(0, 6).forEach((item: unknown, i: number) => {
+				if (!isRecord(item) || typeof item.title !== 'string' || !item.title) return;
+				const hot = typeof item.hot === 'string' ? item.hot : typeof item.hot === 'number' ? String(item.hot) : '';
+				items.push({
+					rank: i + 1,
+					title: item.title,
+					desc: typeof item.desc === 'string' ? item.desc : '',
+					category: '热点',
+					source: '聚合',
+					heat: hot || '—',
+					detail: typeof item.url === 'string' ? item.url : '',
+				});
+			});
+			return items.length > 0 ? items : null;
+		} catch {
+			return null;
+		}
+	}
+
+	private async fetchZhihuHot(): Promise<HotItem[] | null> {
 		try {
 			const resp = await requestUrl({
 				url: 'https://www.zhihu.com/api/v3/feed/topstory/hot-lists',
 				method: 'GET',
 				headers: { 'User-Agent': 'Mozilla/5.0' },
-				timeout: 15000,
+				timeout: 10000,
 			} as Parameters<typeof requestUrl>[0] & { timeout?: number });
 			const hotItems: HotItem[] = [];
 			if (resp.status === 200 && isRecord(resp.json) && Array.isArray(resp.json.data)) {
@@ -1509,6 +1585,10 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		const page = this.pageMap[target];
 		if (page) {
 			page.hidden = false;
+		}
+		/* 星图页：容器从 hidden 变为可见，需重新测量尺寸并重排布局 */
+		if (target === 'agent-dashboard-graph') {
+			this.graphRefreshCallback?.();
 		}
 	}
 
@@ -1989,9 +2069,15 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 				void this.openGitHubUrl(`https://github.com/${snapshot.fullName}`);
 			});
 
-			/* 一键生成 AI 中文动态报告（保存到 Reports 并打开） */
+			/* AI 中文提炼摘要：自动生成，直接展示在卡片内 */
+			const summaryEl = card.createDiv({ cls: 'agent-dashboard-project-summary' });
+			summaryEl.createSpan({ cls: 'agent-dashboard-project-label', text: '🤖 AI 中文摘要（更新了什么）' });
+			const summaryBody = summaryEl.createDiv({ cls: 'agent-dashboard-project-summary-body', text: '正在生成摘要…' });
+			void this.loadProjectSummary(snapshot, summaryBody);
+
+			/* 一键生成并保存完整中文动态报告（保存到 Reports 并打开） */
 			const reportButton = card.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
-			reportButton.createSpan({ text: '生成中文动态报告' });
+			reportButton.createSpan({ text: '保存完整报告' });
 			this.registerDomEvent(reportButton, 'click', () => {
 				reportButton.disabled = true;
 				reportButton.setText('生成中…');
@@ -2005,7 +2091,7 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 					})
 					.finally(() => {
 						reportButton.disabled = false;
-						reportButton.setText('生成中文动态报告');
+						reportButton.setText('保存完整报告');
 					});
 			});
 
@@ -2090,6 +2176,36 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 		await this.app.vault.create(path, parts.join('\n\n---\n\n') + '\n');
 		return path;
+	}
+
+	/** 在项目卡片内直接生成并展示 AI 中文提炼摘要（会话内缓存，避免重复调用模型）。 */
+	private async loadProjectSummary(snapshot: RepoSnapshot, el: HTMLElement): Promise<void> {
+		const cached = this.projectSummaryCache.get(snapshot.fullName);
+		if (cached) {
+			el.setText(cached);
+			return;
+		}
+		try {
+			const result = await this.projectReport.generateReport(snapshot, createRequestContext('background-task'));
+			if (this.isClosed) return;
+			if (result.report) {
+				/* 粗略去除 Markdown 符号，以纯文本展示 */
+				const text = result.report
+					.replace(/[#*>`-]/g, ' ')
+					.replace(/\s+/g, ' ')
+					.trim();
+				this.projectSummaryCache.set(snapshot.fullName, text);
+				el.setText(text);
+			} else if (result.error) {
+				el.setText(`摘要生成失败：${result.error}`);
+			} else {
+				el.setText('该项目最近没有可总结的动态。');
+			}
+		} catch {
+			if (!this.isClosed) {
+				el.setText('摘要生成失败：模型未配置或网络异常（请在「设置 → 墨忆台 · 模型设置」中配置）。');
+			}
+		}
 	}
 
 	private async handleRefresh(button: HTMLButtonElement): Promise<void> {
