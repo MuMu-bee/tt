@@ -158,14 +158,6 @@ export const DASHBOARD_ACTIONS: DashboardAction[] = [
 	{ id: 'vault-lint', label: 'Vault 检查', icon: 'scan-search' },
 ];
 
-/** 插件自产目录：统一引用，避免魔法字符串在多个文件中漂移。 */
-export const WORKBENCH_DIRS = {
-	cacheRoot: 'dashboard/cache',
-	daily: 'Daily',
-	reports: 'Reports',
-	inbox: 'Inbox',
-} as const;
-
 // ===== Project tracker types =====
 
 export interface TrackedRelease {
