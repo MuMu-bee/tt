@@ -1,0 +1,57 @@
+sequenceDiagram
+  participant Main as main.onload
+  participant RT as PersistenceRuntime
+  participant PS as JsonlProposalStore
+  participant AS as JsonlApprovalStore
+  participant ATS as JsonlAuditStore
+  participant Gate as PersistenceGate
+  participant Apply as ProposalApplyService
+  participant Write as WriteService
+  participant Port as ObsidianWritePort
+  participant Sink as JsonlAuditSink
+
+  Main->>RT: restore(startupContext)
+  RT->>Gate: status=restoring
+  RT->>PS: restore(ctx)
+  PS-->>RT: loaded/skipped report
+  RT->>AS: restore(ctx)
+  AS-->>RT: loaded/skipped report
+  RT->>ATS: restore(ctx)
+  ATS-->>RT: loaded/skipped/pending report
+  alt all I/O succeeded
+    RT->>Gate: markReady(report)
+  else any I/O/recovery failure
+    RT->>Gate: markDegraded(reason)
+  end
+  RT-->>Main: runtime + report
+  Main->>Main: rebuild index only; no auto apply
+
+  Apply->>Gate: assertReady(apply)
+  alt degraded/restoring
+    Gate-->>Apply: reject PERSISTENCE_DEGRADED
+    Apply-->>Main: failed/skipped, zero WritePort calls
+  else ready
+    Apply->>PS: get(proposalId, ctx)
+    PS-->>Apply: approved proposal
+    Apply->>AS: getForProposal(proposalId, ctx)
+    AS-->>Apply: approve record
+    Apply->>Port: read(targetPath, childCtx)
+    Port-->>Apply: current Markdown
+    Apply->>Apply: compare SHA-256 base_hash
+    alt conflict
+      Apply->>PS: updateStatus(conflict)
+      Apply-->>Main: conflict; no write
+    else hash matches
+      Apply->>Write: write(WriteRequest, ctx)
+      Write->>Gate: assertReady(write)
+      Write->>Port: writeAtomic(targetPath, after)
+      Write->>Port: read(targetPath)
+      Write->>Sink: append(auditEvent, childCtx)
+      Sink->>ATS: append(auditRecord, childCtx)
+      ATS-->>Sink: success/failure
+      Sink-->>Write: persisted/throw
+      Write-->>Apply: WriteResult
+      Apply->>PS: updateStatus(applied|failed)
+      Apply-->>Main: result; no second apply
+    end
+  end

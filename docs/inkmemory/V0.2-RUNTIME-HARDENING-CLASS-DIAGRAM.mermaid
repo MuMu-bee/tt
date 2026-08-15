@@ -1,0 +1,225 @@
+classDiagram
+  class RequestContext {
+    +string request_id
+    +RequestActor actor
+    +string created_at
+    +string parent_request_id
+    +child() RequestContext
+  }
+  class FeatureFlags {
+    +boolean semantic_search
+    +boolean semantic_fallback
+    +boolean new_write_pipeline
+    +boolean organize_auto_apply
+    +boolean fiction_proposal_only
+    +OrganizeFlags organize
+  }
+  class SearchConfig {
+    +number keyword_min_results
+    +number keyword_min_score
+    +number keyword_weight
+    +number semantic_weight
+    +boolean semantic_search_enabled
+    +boolean semantic_fallback_enabled
+  }
+  class SearchQuery {
+    +string text
+    +SearchMode mode
+    +number limit
+    +SearchScope scope
+    +boolean force_semantic
+  }
+  class SearchResponse {
+    +SearchResult[] results
+    +SearchDiagnostics diagnostics
+  }
+  class SearchDiagnostics {
+    +number keyword_count
+    +number semantic_count
+    +boolean semantic_called
+    +boolean degraded
+    +boolean semantic_unavailable
+    +string fallback_reason
+  }
+  class SearchService {
+    -IndexPort index
+    -SemanticSearchPort semantic
+    -SearchConfig config
+    +query(request, context) Promise~LegacySearchResult[]~
+    +search(query, context) Promise~SearchResponse~
+  }
+  class IndexPort {
+    <<interface>>
+    +search(text, options, context) Promise~IndexHit[]~
+    +upsert(document, context) Promise~void~
+    +invalidate(path, context) Promise~void~
+    +buildAll(documents, context) Promise~void~
+    +availability() string
+  }
+  class SemanticSearchPort {
+    <<interface>>
+    +health(context) Promise~Health~
+    +search(query, context) Promise~SearchResult[]~
+  }
+  class UnavailableSemanticSearch {
+    +health(context) Promise~Health~
+    +search(query, context) Promise~SearchResult[]~
+  }
+  class NoteRecord {
+    +string path
+    +string content
+    +Record~string,unknown~ frontmatter
+    +string[] tags
+    +string[] links
+    +string hash
+    +VaultZone zone
+  }
+  class PlannedChange {
+    +string path
+    +ChangeKind kind
+    +string before
+    +string after
+    +string diff
+    +string reason
+    +FileChangeStatus status
+    +string before_hash
+    +VaultZone zone
+  }
+  class OrganizePlan {
+    +string plan_id
+    +string request_id
+    +PlannedChange[] changes
+    +SearchScope scope_snapshot
+    +string created_at
+  }
+  class OrganizeService {
+    -OrganizePort scanner
+    -ScopeService scope
+    -FeatureFlags flags
+    +plan(scope, context) Promise~OrganizePlan~
+    -createChange(note, kind) PlannedChange
+  }
+  class WriteRequest {
+    +string path
+    +string content
+    +string before_hash
+    +ChangeKind kind
+    +SearchScope scope_snapshot
+    +boolean dry_run
+    +VaultZone zone
+    +string request_id
+  }
+  class WriteResult {
+    +string path
+    +WriteStatus status
+    +string before_hash
+    +string after_hash
+    +RefreshStatus refresh
+    +ErrorCode error_code
+  }
+  class WritePort {
+    <<interface>>
+    +read(path, context) Promise~string~
+    +writeAtomic(path, content, context) Promise~void~
+  }
+  class ObsidianWritePort {
+    -App app
+    +read(path, context) Promise~string~
+    +writeAtomic(path, content, context) Promise~void~
+  }
+  class WriteService {
+    -WritePort port
+    -AuditSink audit
+    -IndexLifecycleService lifecycle
+    -FeatureFlags flags
+    +write(request, context) Promise~WriteResult~
+    -validate(request, current) ValidationResult
+    -appendAudit(request, result, context) Promise~void~
+  }
+  class IndexLifecycleService {
+    -VaultReaderPort reader
+    -IndexPort index
+    -number generation
+    -Queue~LifecycleEvent~ queue
+    -IndexLifecycleState state
+    +rebuild(context) Promise~void~
+    +create(path, context) Promise~void~
+    +modify(path, context) Promise~void~
+    +delete(path, context) Promise~void~
+    +rename(oldPath, newPath, context) Promise~void~
+    +getState() IndexLifecycleState
+  }
+  class ProposalRecord {
+    +string proposal_id
+    +string request_id
+    +string target_path
+    +string base_hash
+    +string diff
+    +ChangeKind kind
+    +ProposalStatus status
+    +boolean requires_approval
+  }
+  class ApprovalRecord {
+    +string approval_id
+    +string proposal_id
+    +ApprovalDecision decision
+    +string decided_at
+  }
+  class AuditEvent {
+    +string request_id
+    +string path
+    +string action
+    +string before_hash
+    +string after_hash
+    +string result
+    +string error_code
+  }
+  class ProposalPort {
+    <<interface>>
+    +save(proposal, context) Promise~void~
+    +get(id, context) Promise~ProposalRecord~
+  }
+  class ApprovalPort {
+    <<interface>>
+    +record(approval, context) Promise~void~
+  }
+  class AuditSink {
+    <<interface>>
+    +append(event, context) Promise~void~
+    +query(filter, context) Promise~AuditEvent[]~
+  }
+  class AgentDashboardView {
+    -number searchVersion
+    -number lifecycleToken
+    -boolean isClosed
+    +loadKnowledgeResults() Promise~void~
+    +onClose() Promise~void~
+    +openKnowledgeResult(result) Promise~void~
+  }
+  class RuntimeComposition {
+    +SearchService search
+    +OrganizeService organize
+    +WriteService write
+    +IndexLifecycleService lifecycle
+    +compose(app, settings) RuntimeServices
+  }
+  SearchService --> IndexPort
+  SearchService --> SemanticSearchPort
+  UnavailableSemanticSearch ..|> SemanticSearchPort
+  OrganizeService --> NoteRecord
+  OrganizeService --> PlannedChange
+  WriteService --> WritePort
+  ObsidianWritePort ..|> WritePort
+  WriteService --> AuditSink
+  WriteService --> IndexLifecycleService
+  IndexLifecycleService --> IndexPort
+  IndexLifecycleService --> RequestContext
+  AgentDashboardView --> SearchService
+  AgentDashboardView --> IndexLifecycleService
+  RuntimeComposition --> SearchService
+  RuntimeComposition --> OrganizeService
+  RuntimeComposition --> WriteService
+  RuntimeComposition --> ObsidianWritePort
+  ProposalPort --> ProposalRecord
+  ApprovalPort --> ApprovalRecord
+  AuditSink --> AuditEvent

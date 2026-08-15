@@ -184,7 +184,7 @@ export class VaultScanner {
 	}
 
 	private isInboxFile(file: TFile): boolean {
-		return file.path.startsWith('Inbox/') && file.extension === 'md';
+		return file.path.startsWith(`${WORKBENCH_DIRS.inbox}/`) && file.extension === 'md';
 	}
 
 	private isOrphan(file: TFile, incoming: Record<string, number>): boolean {

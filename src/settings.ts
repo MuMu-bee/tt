@@ -1,17 +1,25 @@
-import { PluginSettingTab, Setting } from 'obsidian';
+import { Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { App } from 'obsidian';
 import type AgentDashboardPlugin from './main';
-import type { AgentConfig } from './data/dashboardTypes';
-import { DEFAULT_AGENT_CONFIG } from './data/dashboardTypes';
+import type { AgentConfig, ProjectTrackerSettings } from './data/dashboardTypes';
+import { DEFAULT_AGENT_CONFIG, DEFAULT_PROJECT_TRACKER_SETTINGS } from './data/dashboardTypes';
+import { OpenAiModel } from './adapters/openAiModel';
+import { createRequestContext } from './application/requestContext';
+import { parseRepoFullName } from './application/githubTracker';
+
+import type { FeatureFlags } from './application/featureFlags';
+import { DEFAULT_FEATURE_FLAGS } from './application/featureFlags';
 
 export interface AgentDashboardSettings {
-	hermesPath: string;
 	agent: AgentConfig;
+	featureFlags: FeatureFlags;
+	projectTracker: ProjectTrackerSettings;
 }
 
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
-	hermesPath: '',
 	agent: { ...DEFAULT_AGENT_CONFIG },
+	featureFlags: { ...DEFAULT_FEATURE_FLAGS, organize: { ...DEFAULT_FEATURE_FLAGS.organize } },
+	projectTracker: { ...DEFAULT_PROJECT_TRACKER_SETTINGS },
 };
 
 export class AgentDashboardSettingTab extends PluginSettingTab {
@@ -25,23 +33,6 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
-
-		new Setting(containerEl)
-			.setName('智能体命令')
-			.setHeading();
-
-		new Setting(containerEl)
-			.setName('Hermes 命令路径')
-			.setDesc('桌面端执行深度研究和信息流摘要时使用。留空则自动查找 hermes 命令。')
-			.addText((text) =>
-				text
-					.setPlaceholder('Hermes')
-					.setValue(this.plugin.settings.hermesPath)
-					.onChange(async (value) => {
-						this.plugin.settings.hermesPath = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			);
 
 		// ===== 墨忆台 Agent 设置 =====
 		new Setting(containerEl)
@@ -124,6 +115,224 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.agent.ollamaModel)
 					.onChange(async (value) => {
 						this.plugin.settings.agent.ollamaModel = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('Embedding 模型')
+			.setDesc('本地语义搜索用的向量模型，如 bge-m3，需已在 Ollama 中安装。')
+			.addText((text) =>
+				text
+					.setPlaceholder(DEFAULT_AGENT_CONFIG.ollamaEmbeddingModel)
+					.setValue(this.plugin.settings.agent.ollamaEmbeddingModel)
+					.onChange(async (value) => {
+						this.plugin.settings.agent.ollamaEmbeddingModel = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('视觉模型名称')
+			.setDesc('用于「图片理解」的云端视觉模型，如 step-1o-turbo-vision。留空则图片理解不可用。')
+			.addText((text) =>
+				text
+					.setPlaceholder('step-1o-turbo-vision')
+					.setValue(this.plugin.settings.agent.visionModel)
+					.onChange(async (value) => {
+						this.plugin.settings.agent.visionModel = value.trim();
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('测试模型连接')
+			.setDesc('用当前设置（云端或本地）调用一次模型，验证 key 和地址是否可用。')
+			.addButton((button) =>
+				button
+					.setButtonText('测试连接')
+					.setCta()
+					.onClick(async () => {
+						button.setDisabled(true);
+						button.setButtonText('测试中…');
+						try {
+							const model = new OpenAiModel(this.plugin.settings.agent);
+							await model.generate('请只回复：连接成功', createRequestContext('user'));
+							new Notice('模型连接成功');
+						} catch (error) {
+							const message = error instanceof Error ? error.message : '未知错误';
+							new Notice(`模型连接失败：${message}`);
+						} finally {
+							button.setDisabled(false);
+							button.setButtonText('测试连接');
+						}
+					}),
+			);
+
+		// ===== 项目追踪 =====
+		new Setting(containerEl)
+			.setName('项目追踪')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('GitHub Token')
+			.setDesc('可选的 GitHub 个人访问令牌（只读即可），用于提高获取频率限制。不填也能用。')
+			.addText((text) => {
+				text.inputEl.type = 'password';
+				text
+					.setPlaceholder('github_pat_...')
+					.setValue(this.plugin.settings.projectTracker.githubToken)
+					.onChange(async (value) => {
+						this.plugin.settings.projectTracker.githubToken = value.trim();
+						await this.plugin.saveSettings();
+					});
+			});
+
+		new Setting(containerEl)
+			.setName('每日自动生成报告')
+			.setDesc('每天 8 点后打开 Obsidian 时，自动生成一份中文项目动态报告。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.projectTracker.autoReport)
+					.onChange(async (value) => {
+						this.plugin.settings.projectTracker.autoReport = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('关注的项目')
+			.setDesc('格式为 所有者/仓库名，如 HKUDS/DeepTutor。')
+			.setHeading();
+
+		const repos = this.plugin.settings.projectTracker.repos;
+		repos.forEach((repo, index) => {
+			new Setting(containerEl)
+				.setName(repo)
+				.addButton((button) =>
+					button
+						.setButtonText('删除')
+						.setWarning()
+						.onClick(async () => {
+							this.plugin.settings.projectTracker.repos.splice(index, 1);
+							await this.plugin.saveSettings();
+							this.display();
+						}),
+				);
+		});
+
+		let repoInput: TextComponent | null = null;
+		new Setting(containerEl)
+			.addText((text) => {
+				repoInput = text;
+				text.setPlaceholder('所有者/仓库名');
+			})
+			.addButton((button) =>
+				button
+					.setButtonText('添加')
+					.onClick(async () => {
+						const value = repoInput?.getValue().trim() ?? '';
+						if (!value) {
+							return;
+						}
+						try {
+							parseRepoFullName(value);
+						} catch (error) {
+							new Notice(error instanceof Error ? error.message : '仓库格式不正确');
+							return;
+						}
+						const repos = this.plugin.settings.projectTracker.repos;
+						if (!repos.includes(value)) {
+							repos.push(value);
+							await this.plugin.saveSettings();
+						}
+						this.display();
+					}),
+			);
+
+		// ===== 知识库搜索 =====
+		new Setting(containerEl)
+			.setName('知识库搜索')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('语义搜索')
+			.setDesc('开启后使用本地 Ollama 的 Embedding 模型做语义匹配；关闭或 Ollama 不可用时自动降级为关键词搜索。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.semantic_search)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.semantic_search = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		// ===== 整理工作台 · 生成开关 =====
+		new Setting(containerEl)
+			.setName('整理工作台 · 生成开关')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('补全 frontmatter')
+			.setDesc('为缺少 frontmatter 的笔记生成补全方案，生成整理计划后需逐条批准。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.organize.frontmatter)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.organize.frontmatter = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('补充标签')
+			.setDesc('为缺少标签的笔记生成补充标签方案。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.organize.tags)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.organize.tags = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('补充反向链接')
+			.setDesc('为缺少反向链接的笔记生成补充链接方案。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.organize.links)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.organize.links = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('格式规范化')
+			.setDesc('为格式不规范的笔记生成规范化方案。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.organize.format)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.organize.format = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		// ===== 整理工作台 · 写入开关 =====
+		new Setting(containerEl)
+			.setName('整理工作台 · 写入开关')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('启用受控写入')
+			.setDesc('批准后的方案可执行写入（apply）。保持关闭时只生成和审批方案，不修改任何笔记。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.new_write_pipeline)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.new_write_pipeline = value;
 						await this.plugin.saveSettings();
 					}),
 			);

@@ -1,0 +1,129 @@
+classDiagram
+  class RequestContext {
+    +string request_id
+    +RequestActor actor
+    +string created_at
+    +string parent_request_id
+    +child() RequestContext
+  }
+  class OrganizePlan {
+    +string plan_id
+    +string request_id
+    +PlannedChange[] changes
+    +SearchScope scope_snapshot
+    +string created_at
+  }
+  class PlannedChange {
+    +string path
+    +ChangeKind kind
+    +string before
+    +string after
+    +string diff
+    +string before_hash
+    +VaultZone zone
+    +FileChangeStatus status
+  }
+  class ProposalRecord {
+    +number schema_version
+    +string proposal_id
+    +string request_id
+    +string plan_id
+    +string target_path
+    +VaultZone zone
+    +ChangeKind kind
+    +string before_hash
+    +string patch
+    +string before_content
+    +string after_content
+    +string reason
+    +ProposalStatus status
+    +number version
+    +string created_at
+    +string updated_at
+    +contentHash() string
+  }
+  class ApprovalRecord {
+    +number schema_version
+    +string approval_id
+    +string proposal_id
+    +string request_id
+    +ApprovalDecision decision
+    +string note
+    +string decided_at
+    +string content_hash
+  }
+  class AuditRecord {
+    +number schema_version
+    +string audit_id
+    +string request_id
+    +string proposal_id
+    +string target_path
+    +string action
+    +AuditResult result
+    +string error_code
+    +EndpointStatus endpoint_status
+    +string created_at
+    +string content_hash
+  }
+  class ProposalService {
+    +createFromPlan(plan, ctx) ProposalRecord[]
+    +query(filter, ctx) ProposalRecord[]
+    +approve(id, input, ctx) ProposalResult
+    +reject(id, input, ctx) ProposalResult
+    +apply(id, ctx) ProposalResult
+    +recover(ctx) RecoveryReport
+  }
+  class ProposalStore {
+    <<interface>>
+    +save(record, ctx) StoreWriteResult
+    +get(id, ctx) ProposalRecord
+    +query(filter, ctx) ProposalRecord[]
+    +compareAndSet(id, expected, next, ctx) StoreWriteResult
+    +saveApproval(record, ctx) StoreWriteResult
+    +recover(ctx) RecoveryReport
+  }
+  class AuditStore {
+    <<interface>>
+    +append(record, ctx) StoreWriteResult
+    +query(filter, ctx) AuditRecord[]
+    +recover(ctx) RecoveryReport
+    +compensate(id, ctx) StoreWriteResult
+  }
+  class OrganizeService {
+    +plan(scope, ctx) OrganizePlan
+  }
+  class WriteService {
+    +write(request, ctx) WriteResult
+  }
+  class WritePort {
+    <<interface>>
+    +read(path, ctx) string
+    +writeAtomic(path, content, ctx) void
+  }
+  class ObsidianWritePort {
+    +read(path, ctx) string
+    +writeAtomic(path, content, ctx) void
+  }
+  class IndexLifecycleService {
+    +modify(path, ctx) void
+    +rebuild(ctx) void
+    +getState() IndexLifecycleState
+  }
+  class AuditService {
+    +append(event, ctx) void
+    +query(filter, ctx) AuditRecord[]
+  }
+
+  OrganizePlan "1" o-- "many" PlannedChange
+  PlannedChange --> ProposalRecord : materializes
+  ProposalService --> OrganizeService : consumes plan
+  ProposalService --> ProposalStore : persists/CAS
+  ProposalService --> WriteService : approved apply
+  ProposalService --> AuditService : records decisions
+  ProposalStore --> ApprovalRecord : stores
+  AuditService --> AuditStore : appends/queries
+  WriteService --> WritePort : read/write
+  ObsidianWritePort ..|> WritePort
+  WriteService --> IndexLifecycleService : refresh
+  ProposalRecord --> AuditRecord : linked by proposal_id
+  RequestContext --> ProposalService : request scope

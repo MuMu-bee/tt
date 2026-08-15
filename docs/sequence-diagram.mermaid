@@ -1,0 +1,60 @@
+sequenceDiagram
+  participant Main as main.onload
+  participant RT as PersistenceRuntime
+  participant Gate as PersistenceGate
+  participant PS as JsonlProposalStore
+  participant AS as JsonlApprovalStore
+  participant ATS as JsonlAuditStore
+  participant Apply as ProposalApplyService
+  participant Write as WriteService
+  participant WP as ObsidianWritePort
+  participant Sink as JsonlAuditSink
+
+  Main->>RT: await restore(startupContext)
+  RT->>Gate: restoring
+  RT->>PS: restore(ctx)
+  PS-->>RT: loaded/skipped/duplicates
+  RT->>AS: restore(ctx)
+  AS-->>RT: loaded/skipped/duplicates
+  RT->>ATS: restore(ctx)
+  ATS-->>RT: loaded/skipped/pending-compensation
+  alt 缺失/空文件/坏行可容忍且 I/O 成功
+    RT->>Gate: markReady(report with warnings)
+  else Vault I/O 或不可恢复错误
+    RT->>Gate: markDegraded(reason)
+  end
+  RT-->>Main: RuntimeServices + recovery report
+  Main->>Main: rebuild index only; 不自动 approve/apply/retry
+
+  Apply->>Gate: assertReady(apply)
+  alt degraded/restoring
+    Gate-->>Apply: reject PERSISTENCE_DEGRADED
+    Apply-->>Main: failed/skipped; 零 WP.writeAtomic
+  else ready
+    Apply->>PS: get(proposalId, ctx)
+    PS-->>Apply: approved proposal
+    Apply->>AS: getForProposal(proposalId, ctx)
+    AS-->>Apply: approve record
+    Apply->>WP: read(targetPath, childCtx)
+    WP-->>Apply: current Markdown
+    alt hash conflict
+      Apply->>PS: updateStatus(conflict, ctx)
+      Apply-->>Main: conflict; no write
+    else hash matches
+      Apply->>Write: write(request, ctx)
+      Write->>Gate: assertReady(write)
+      Write->>WP: writeAtomic(targetPath, after, childCtx)
+      Write->>WP: read(targetPath, childCtx)
+      Write->>Sink: append(auditEvent, childCtx)
+      Sink->>ATS: append(auditRecord, childCtx)
+      ATS-->>Sink: success | pending-compensation | failed
+      alt audit persistence failed
+        Sink-->>Write: throw/pending-compensation
+        Write-->>Apply: failed; gate=degraded
+      else audit persisted
+        Sink-->>Write: success
+        Write-->>Apply: applied result
+        Apply->>PS: updateStatus(applied, ctx)
+      end
+    end
+  end

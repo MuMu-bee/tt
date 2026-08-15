@@ -1,5 +1,15 @@
+import { requestUrl } from 'obsidian';
 import type { AgentConfig, ChatMessage, ChatReference } from '../data/dashboardTypes';
 import { VaultContextService } from './vaultContext';
+
+/**
+ * 对话服务（含 Vault 上下文注入的流式 LLM 对话）。
+ * 注意：当前版本对话页（AgentDashboardView 的「对话」页）尚未接入本服务，
+ * 发送消息实际走深度研究（AgentActionService.runDeepResearch）。接入前请勿
+ * 宣称本服务为生产对话链路。
+ */
+/** 注入 API 的最近对话条数上限。 */
+const HISTORY_WINDOW = 20;
 
 const SYSTEM_PROMPT = `你是墨忆台，住在用户 Obsidian 知识库里的私人智能助手。
 
@@ -107,15 +117,10 @@ export class ChatService {
 		try {
 			await this.callLLM(apiMessages, assistantMessage);
 		} catch (error) {
-			if (isAbortError(error)) {
-				// 用户主动停止：保留已生成的部分内容，不当作错误处理。
-				assistantMessage.content = assistantMessage.content || '（已停止）';
-			} else {
-				const errorMsg = error instanceof Error ? error.message : '请求失败';
-				assistantMessage.content = `抱歉，出了点问题：${errorMsg}`;
-				assistantMessage.streaming = false;
-				this.emit({ type: 'error', error: errorMsg });
-			}
+			const errorMsg = error instanceof Error ? error.message : '请求失败';
+			assistantMessage.content = `抱歉，出了点问题：${errorMsg}`;
+			assistantMessage.streaming = false;
+			this.emit({ type: 'error', error: errorMsg });
 		}
 
 		assistantMessage.streaming = false;
@@ -152,8 +157,7 @@ export class ChatService {
 		const url = `${this.config.baseUrl.replace(/\/+$/, '')}/chat/completions`;
 
 		// Try streaming first, fall back to non-streaming.
-		// 用户停止或超时导致的 AbortError 不得降级重试：重试会重新发起一个
-		// 无法再被停止的完整请求。
+		// 用户停止导致的 AbortError 不得降级重试：重试会重新发起一个无法再被停止的完整请求。
 		try {
 			await this.streamCloudAPI(url, apiMessages, assistantMessage);
 		} catch (error) {
@@ -232,7 +236,8 @@ export class ChatService {
 		apiMessages: Array<{ role: string; content: string }>,
 		assistantMessage: ChatMessage,
 	): Promise<void> {
-		const response = await fetch(url, {
+		const response = await requestUrl({
+			url,
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
@@ -243,14 +248,9 @@ export class ChatService {
 				messages: apiMessages,
 				max_tokens: 2048,
 			}),
-			signal: this.abortController?.signal,
 		});
 
-		if (!response.ok) {
-			throw new Error(`API 返回 ${response.status}`);
-		}
-
-		const data = (await response.json()) as {
+		const data = response.json as {
 			choices?: Array<{ message?: { content?: string } }>;
 		};
 		const content = data.choices?.[0]?.message?.content;
@@ -336,7 +336,7 @@ export class ChatService {
 		messages.push({ role: 'system', content: systemContent });
 
 		// Conversation history (last 20 messages to keep context manageable)
-		const recentMessages = this.messages.slice(-20);
+		const recentMessages = this.messages.slice(-HISTORY_WINDOW);
 		for (const msg of recentMessages) {
 			if (msg.role === 'system') continue;
 			messages.push({ role: msg.role, content: msg.content });
@@ -356,7 +356,7 @@ export class ChatService {
 	}
 
 	private generateId(): string {
-		return `msg_${crypto.randomUUID()}`;
+		return `msg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 	}
 }
 

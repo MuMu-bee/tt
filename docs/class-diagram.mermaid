@@ -1,0 +1,152 @@
+classDiagram
+  class RequestContext {
+    +string request_id
+    +RequestActor actor
+    +string created_at
+    +child() RequestContext
+  }
+  class PersistenceRecoveryReport {
+    +PersistenceStatus status
+    +StoreRecoveryResult proposals
+    +StoreRecoveryResult approvals
+    +StoreRecoveryResult audit
+    +string[] warnings
+    +string error
+  }
+  class StoreRecoveryResult {
+    +number loaded
+    +number skipped
+    +number duplicates
+    +number pending_compensation
+  }
+  class PersistenceGate {
+    -PersistenceStatus status
+    +getStatus() PersistenceStatus
+    +assertReady(operation) void
+    +markDegraded(reason) void
+    +markReady(report) void
+  }
+  class PersistenceRuntime {
+    +ProposalStore proposals
+    +ApprovalStore approvals
+    +AuditStore audits
+    +PersistenceGate gate
+    +restore(ctx) Promise~PersistenceRecoveryReport~
+    +getStatus() PersistenceStatus
+    +getReport() PersistenceRecoveryReport
+  }
+  class JsonlTextStorage {
+    <<interface>>
+    +read(ctx) Promise~string~
+    +write(value, ctx) Promise~void~
+  }
+  class ObsidianVaultJsonlStorage {
+    -App app
+    -string path
+    +read(ctx) Promise~string~
+    +write(value, ctx) Promise~void~
+  }
+  class RestorableStore {
+    <<interface>>
+    +restore(ctx) Promise~StoreRecoveryResult~
+  }
+  class JsonlProposalStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +save(proposal, ctx) Promise~void~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+    +updateStatus(id, status, ctx) Promise~void~
+  }
+  class JsonlApprovalStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +save(record, ctx) Promise~void~
+    +getForProposal(id, ctx) Promise~ApprovalRecord~
+  }
+  class JsonlAuditStore {
+    -Map records
+    +restore(ctx) Promise~StoreRecoveryResult~
+    +append(record, ctx) Promise~AuditWriteStatus~
+    +query(filter, ctx) Promise~AuditRecord[]~
+    +listPendingCompensation(ctx) Promise~AuditRecord[]~
+    +retry(id, ctx) Promise~AuditWriteStatus~
+  }
+  class JsonlAuditSink {
+    -JsonlAuditStore store
+    +append(event, ctx) Promise~void~
+    +query(filter, ctx) Promise~AuditEvent[]~
+  }
+  class WriteService {
+    -WritePort port
+    -AuditSink audit
+    -PersistenceGate gate
+    +write(request, ctx) Promise~WriteResult~
+  }
+  class ProposalApplyService {
+    -ProposalStore proposals
+    -ApprovalStore approvals
+    -WriteService writes
+    -PersistenceGate gate
+    +apply(proposalId, ctx) Promise~ProposalApplyResult~
+  }
+  class ProposalService {
+    -ProposalStore store
+    +createFromPlan(plan, ctx) Promise~Proposal[]~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+  }
+  class ApprovalService {
+    -ProposalStore proposals
+    -ApprovalStore approvals
+    +decide(id, decision, ctx, note) Promise~ApprovalResult~
+  }
+  class ProposalStore {
+    <<interface>>
+    +save(proposal, ctx) Promise~void~
+    +get(id, ctx) Promise~Proposal~
+    +list(filter, ctx) Promise~Proposal[]~
+    +updateStatus(id, status, ctx) Promise~void~
+  }
+  class ApprovalStore {
+    <<interface>>
+    +save(record, ctx) Promise~void~
+    +getForProposal(id, ctx) Promise~ApprovalRecord~
+  }
+  class AuditStore {
+    <<interface>>
+    +append(record, ctx) Promise~AuditWriteStatus~
+    +query(filter, ctx) Promise~AuditRecord[]~
+    +listPendingCompensation(ctx) Promise~AuditRecord[]~
+    +retry(id, ctx) Promise~AuditWriteStatus~
+  }
+  class ObsidianWritePort {
+    +read(path, ctx) Promise~string~
+    +writeAtomic(path, content, ctx) Promise~void~
+  }
+
+  PersistenceRuntime *-- PersistenceGate
+  PersistenceRuntime *-- JsonlProposalStore
+  PersistenceRuntime *-- JsonlApprovalStore
+  PersistenceRuntime *-- JsonlAuditStore
+  ObsidianVaultJsonlStorage ..|> JsonlTextStorage
+  JsonlProposalStore ..|> ProposalStore
+  JsonlProposalStore ..|> RestorableStore
+  JsonlApprovalStore ..|> ApprovalStore
+  JsonlApprovalStore ..|> RestorableStore
+  JsonlAuditStore ..|> AuditStore
+  JsonlAuditStore ..|> RestorableStore
+  JsonlProposalStore --> JsonlTextStorage
+  JsonlApprovalStore --> JsonlTextStorage
+  JsonlAuditStore --> JsonlTextStorage
+  JsonlAuditSink --> JsonlAuditStore
+  ProposalService --> ProposalStore
+  ApprovalService --> ProposalStore
+  ApprovalService --> ApprovalStore
+  ProposalApplyService --> ProposalStore
+  ProposalApplyService --> ApprovalStore
+  ProposalApplyService --> PersistenceGate
+  ProposalApplyService --> WriteService
+  WriteService --> PersistenceGate
+  WriteService --> ObsidianWritePort
+  WriteService --> JsonlAuditSink

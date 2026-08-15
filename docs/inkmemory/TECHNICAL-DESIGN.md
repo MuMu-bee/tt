@@ -45,43 +45,72 @@ Vault Markdown
 
 ```text
 src/
-├── main.ts                         # 现有插件入口，负责组装依赖
-├── ui/
-│   ├── dashboard-view.ts           # 复用/改造成熟 Dashboard
-│   ├── chat-view.ts                # 工作台 Agent 对话与任务状态
-│   ├── review-view.ts              # proposal 审批队列
-│   └── audit-view.ts               # 审计查询和补偿状态
+├── main.ts                         # 插件入口，负责组装依赖与注册视图
+├── data/
+│   └── dashboardTypes.ts           # Dashboard 数据类型与默认配置
 ├── application/
-│   ├── workbench-agent.ts          # 意图到工具计划，不执行越权动作
-│   ├── command-handlers.ts         # 命令、按钮、定时任务入口
-│   └── task-coordinator.ts         # 取消、重试、暂停、进度和 request_id
+│   ├── contracts.ts                # Proposal/Approval/Audit/搜索契约
+│   ├── featureFlags.ts             # 功能开关
+│   ├── persistenceContracts.ts     # 持久化状态契约
+│   ├── requestContext.ts           # 请求上下文
+│   ├── githubTracker.ts            # GitHub API 解析（纯函数）
+│   ├── modelCompletions.ts         # 云端模型请求构造
+│   ├── vectorMath.ts               # 向量计算工具
+│   └── visionCompletions.ts        # 视觉模型请求构造
 ├── domain/
-│   ├── search.ts                   # 关键词优先、语义兜底策略
-│   ├── memory-publish.ts           # 动态记忆快照与版本
-│   ├── organize.ts                 # 白名单整理规则
-│   ├── proposal.ts                 # proposal 生命周期与 diff
-│   ├── approval.ts                 # 审批决策
-│   ├── research.ts                 # 研究任务和来源记录
-│   └── audit.ts                    # 双写、补偿和查询
+│   ├── vault-document.ts           # Markdown 文档解析
+│   └── keyword-search.ts           # 关键词搜索算法
 ├── ports/
-│   ├── vault.ts
-│   ├── index.ts
-│   ├── embedding.ts
-│   ├── model.ts
-│   ├── network.ts
-│   ├── hermes.ts
-│   └── audit-store.ts
+│   ├── modelPort.ts                # 模型接口
+│   ├── indexPort.ts                # 索引接口
+│   ├── vaultReaderPort.ts          # 只读 Vault 接口
+│   ├── semanticSearchPort.ts       # 语义搜索接口
+│   ├── proposalPort.ts             # Proposal 接口
+│   ├── approvalPort.ts             # Approval 接口
+│   ├── auditStore.ts               # 审计接口
+│   ├── writePort.ts                # 写入接口
+│   └── persistencePort.ts          # 持久化接口
 ├── adapters/
-│   ├── obsidian-vault.ts
-│   ├── sqlite-index.ts
-│   ├── ollama-or-cloud-model.ts
-│   ├── network-provider.ts
-│   ├── hermes-memory-adapter.ts
-│   └── dual-audit-store.ts
-└── workers/
-    ├── index-worker.ts
-    ├── embedding-worker.ts
-    └── research-worker.ts
+│   ├── in-memory-vault-index.ts    # 内存索引适配器
+│   ├── obsidianVaultReader.ts      # Obsidian Vault 只读适配器
+│   ├── obsidianWritePort.ts        # Obsidian 写入适配器
+│   ├── obsidianJsonlStorage.ts     # Vault JSONL 存储适配器
+│   ├── jsonlProposalStore.ts       # Proposal JSONL 持久化
+│   ├── jsonlApprovalStore.ts       # Approval JSONL 持久化
+│   ├── jsonlAuditStore.ts          # Audit JSONL 持久化
+│   ├── jsonlAuditSink.ts           # 审计写入适配器
+│   ├── ollamaEmbedding.ts          # Ollama 嵌入适配器
+│   ├── ollamaSemanticSearch.ts     # Ollama 语义搜索适配器
+│   ├── openAiModel.ts              # 云端模型适配器
+│   └── unavailable*.ts             # 安全降级适配器
+├── services/
+│   ├── runtimeComposition.ts       # Composition root
+│   ├── searchService.ts            # 搜索服务（关键词优先）
+│   ├── indexLifecycleService.ts    # 索引生命周期管理
+│   ├── organizeService.ts          # 整理计划生成
+│   ├── proposalService.ts          # Proposal 服务
+│   ├── approvalService.ts          # 审批服务
+│   ├── proposalApplyService.ts     # Apply 服务（hash 校验）
+│   ├── writeService.ts             # 受控写入服务
+│   ├── auditService.ts             # 审计服务
+│   ├── persistenceGate.ts          # 持久化降级门禁
+│   ├── dashboardService.ts         # Dashboard 数据加载
+│   ├── dashboardMath.ts            # Dashboard 数学工具
+│   ├── agentActionService.ts       # 快捷操作业务逻辑
+│   ├── projectTracker.ts           # GitHub 项目追踪
+│   ├── projectReportService.ts     # AI 项目报告生成
+│   ├── visionService.ts            # 图片理解服务
+│   ├── feedService.ts              # Feed 服务
+│   ├── cacheStore.ts               # 缓存存储
+│   └── vaultScanner.ts             # Vault 扫描服务
+├── ui/
+│   ├── ImageUnderstandModal.ts     # 图片理解弹窗
+│   └── InboxIngestModal.ts         # 收件箱导入弹窗
+├── views/
+│   ├── AgentDashboardView.ts       # 主视图（8 页面切换）
+│   └── proposalViewState.ts        # Proposal UI 状态纯函数
+└── utils/
+    └── sha256.ts                   # 跨平台 SHA-256
 ```
 
 现有 Python Hermes memory CLI 若继续使用，必须封装在 `HermesAdapter` 或 `IndexAdapter` 后面；业务层不能依赖 CLI 的命令行字符串。Hermes CLI 是可选适配器，不是墨忆台启动的硬依赖。
@@ -332,3 +361,45 @@ apply 过程必须是不可跳过的顺序：
 - 回归测试：保留现有 Python 编译、Node 语法、Hermes 既有回归测试；新增旧 frontmatter、小说资料保护和重启恢复场景。
 
 发布门槛：任何写入安全测试失败不得发布；索引丢失必须能从 Vault 重建；Hermes 不可用不得阻塞工作台基本功能。
+
+## 9. UI 设计原则
+
+### 9.1 CSS 策略
+
+墨忆台不使用自定义 CSS 变量，而是直接使用 Obsidian 原生 CSS 变量：
+
+| 用途 | 变量 | 说明 |
+|---|---|---|
+| 主背景 | `--background-primary` | 跟随 Obsidian 主题 |
+| 侧栏背景 | `--background-secondary` | 自动适配深浅色 |
+| 主文字 | `--text-normal` | 跟随主题 |
+| 次要文字 | `--text-muted` | 降级信息 |
+| 强调色 | `--interactive-accent` | 按钮、高亮 |
+| 边框 | `--background-modifier-border` | 卡片分隔 |
+| 阴影 | `--shadow-s` / `--shadow-m` | 卡片层级 |
+
+采用此策略的原因：
+- 插件自动跟随用户当前使用的任何 Obsidian 主题（如 Cupertino、Minimal 等）
+- 无需维护两套主题逻辑（浅色/深色）
+- 用户更换主题后插件自动适配
+
+### 9.2 页面架构
+
+墨忆台使用 `showPage()` 机制实现多页面切换，共 8 个页面：
+
+| 导航项 | 页面内容 | 状态 |
+|---|---|---|
+| 总览 | 欢迎区 + 指标 + 快捷操作 + 双栏网格（知识星图预览/最近更新/生产动态/健康度）+ 热力图 | ✅ 已实现 |
+| 知识库 | 关键词搜索 + 语义搜索 | ✅ 已实现 |
+| 知识星图 | Canvas 力导向图 + 搜索 + 图谱透镜筛选 | ✅ 已实现 |
+| 任务与计划 | 整理工作台 + 任务列表 | ✅ 已实现 |
+| 项目追踪 | GitHub 项目动态 | ✅ 已实现 |
+| 每日热点 | 热点聚合卡片 | ✅ 已实现 |
+| 对话 | 占位 | ✅ 已实现 |
+| 设置 | 跳转 Obsidian 设置 | ✅ 已实现 |
+
+### 9.3 设计参考
+
+- **Apple 风格**：参考 Obsidian Cupertino 主题（1222★）的设计模式
+- **卡片布局**：参考 Card Board 插件（635★）的卡片式设计
+- **原生集成**：参考 Day Planner 插件（2694★）使用侧边栏/状态栏等原生位置

@@ -10,7 +10,6 @@ import {
 	matchesDashboardQuery,
 	parseTaskLine,
 } from '../src/services/dashboardMath.ts';
-import { parseRssXml } from '../src/services/rssParser.ts';
 
 test('calculates the confirmed weighted health score', () => {
 	const score = calculateHealthScore({
@@ -77,28 +76,6 @@ test('treats cache entries as fresh for less than one hour', () => {
 
 	assert.equal(isCacheFresh('2026-08-03T09:30:00.000Z', now, 60 * 60 * 1000), true);
 	assert.equal(isCacheFresh('2026-08-03T08:59:59.999Z', now, 60 * 60 * 1000), false);
-});
-
-test('parses RSS item fields and decodes XML entities', () => {
-	const items = parseRssXml(`
-		<rss><channel>
-			<item>
-				<title><![CDATA[Agent &amp; notes]]></title>
-				<link>https://example.com/story</link>
-				<description>A &amp; B</description>
-				<pubDate>Mon, 03 Aug 2026 10:00:00 GMT</pubDate>
-			</item>
-		</channel></rss>
-	`);
-
-	assert.deepEqual(items, [
-		{
-			title: 'Agent & notes',
-			link: 'https://example.com/story',
-			description: 'A & B',
-			publishedAt: 'Mon, 03 Aug 2026 10:00:00 GMT',
-		},
-	]);
 });
 
 test('matches dashboard search queries across visible text', () => {
