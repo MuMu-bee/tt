@@ -48,5 +48,13 @@ function diff(before: string, after: string, reason: string): ChangeDiff | null 
   if (before === after) return null;
   return { before, after, diff: `--- before\n+++ after\n@@ ${reason} @@\n-${before}\n+${after}` };
 }
-function frontmatterString(value: Record<string, unknown>, key: string): string | undefined { const candidate = value[key]; return typeof candidate === 'string' ? candidate : undefined; }
+function frontmatterString(value: Record<string, unknown>, key: string): string | undefined {
+  const candidate = value[key];
+  if (typeof candidate === 'string') return candidate;
+  if (Array.isArray(candidate)) {
+    const first = candidate.find((item): item is string => typeof item === 'string');
+    return first;
+  }
+  return undefined;
+}
 function escapeRegExp(value: string): string { return value.replace(/[.*+?^${}()|[\]\\]/gu, '\\$&'); }

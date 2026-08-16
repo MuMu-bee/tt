@@ -10,9 +10,15 @@ export class SearchServiceError extends Error { public readonly code: string; pu
 /** Keyword-first search facade with optional semantic fallback and deterministic hybrid merge. */
 export class SearchService {
   private readonly index: IndexPort;
-  private readonly semantic?: SemanticSearchPort;
+  private readonly semanticProvider: () => SemanticSearchPort | undefined;
   private readonly config: SearchConfig;
-  constructor(index: IndexPort, semantic?: SemanticSearchPort, config: Partial<SearchConfig> = {}) { this.index = index; this.semantic = semantic; this.config = { ...DEFAULT_SEARCH_CONFIG, ...config }; }
+  private readonly flagsGetter?: () => { semantic_search_enabled: boolean; semantic_fallback_enabled: boolean };
+  constructor(index: IndexPort, semantic?: SemanticSearchPort | (() => SemanticSearchPort | undefined), config: Partial<SearchConfig> = {}, flagsGetter?: () => { semantic_search_enabled: boolean; semantic_fallback_enabled: boolean }) {
+    this.index = index;
+    this.semanticProvider = typeof semantic === 'function' ? semantic : () => semantic;
+    this.config = { ...DEFAULT_SEARCH_CONFIG, ...config };
+    this.flagsGetter = flagsGetter;
+  }
   async query(request: SearchRequest): Promise<LegacySearchResult[]>;
   async query(query: string, limit?: number, context?: RequestContext): Promise<LegacySearchResult[]>;
   async query(input: SearchRequest | string, legacyLimit = 10, legacyContext = createRequestContext('user')): Promise<LegacySearchResult[]> {
@@ -33,10 +39,12 @@ export class SearchService {
     const minResults = query.keyword_min_results ?? this.config.keyword_min_results;
     const minScore = query.keyword_min_score ?? this.config.keyword_min_score;
     const shouldSemantic = query.mode === 'semantic' || query.mode === 'hybrid' || query.force_semantic === true || keywordResults.length < minResults || (keywordResults[0]?.score ?? 0) < minScore;
-    const semanticEnabled = this.config.semantic_search_enabled && (query.mode !== 'keyword' || this.config.semantic_fallback_enabled || query.force_semantic === true);
-    if (!shouldSemantic || !semanticEnabled || !this.semantic) return { results: keywordResults, diagnostics: { ...this.emptyDiagnostics(), keyword_count: keywordResults.length, semantic_called: false } };
+    const liveFlags = this.flagsGetter ? this.flagsGetter() : undefined;
+    const semanticEnabled = (liveFlags?.semantic_search_enabled ?? this.config.semantic_search_enabled) && (query.mode !== 'keyword' || (liveFlags?.semantic_fallback_enabled ?? this.config.semantic_fallback_enabled) || query.force_semantic === true);
+    const semantic = this.semanticProvider();
+    if (!shouldSemantic || !semanticEnabled || !semantic) return { results: keywordResults, diagnostics: { ...this.emptyDiagnostics(), keyword_count: keywordResults.length, semantic_called: false } };
     try {
-      const semanticResults = (await this.semantic.search(query, context.child ? context.child() : createRequestContext(context.actor, requestVersion))).slice(0, limit).map((result) => ({ ...result, source: 'semantic' as const }));
+      const semanticResults = (await semantic.search(query, context.child ? context.child() : createRequestContext(context.actor, requestVersion))).slice(0, limit).map((result) => ({ ...result, source: 'semantic' as const }));
       const results = query.mode === 'semantic' ? semanticResults : this.hybrid(keywordResults, semanticResults, limit);
       return { results, diagnostics: { keyword_count: keywordResults.length, semantic_count: semanticResults.length, semantic_called: true, degraded: false, semantic_unavailable: false } };
     } catch (error) {

@@ -11,6 +11,10 @@ export interface FeedBundle {
 	github: GitHubFeedItem[];
 }
 
+/**
+ * 保留类：GitHub 信息流抓取当前没有 UI 消费方（DashboardService.load 返回
+ * feed: []，项目追踪页使用 ProjectTracker）。保留供未来"信息流"需求复用。
+ */
 export class FeedService {
 	constructor(private readonly cache: CacheStore) {}
 

@@ -51,7 +51,7 @@ export default class AgentDashboardPlugin extends Plugin {
 			this.settings.projectTracker.githubToken,
 			this.settings.projectTracker.repos,
 		);
-		const projectReport = new ProjectReportService(model);
+		const projectReport = new ProjectReportService(model, this.app);
 		const visionService = new VisionService(this.app, model);
 		const researchService = new ResearchService(this.app);
 		const memoryPublish = new MemoryPublishService(this.app);
@@ -59,7 +59,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		/* V0.5: TaskCoordinator + PatrolService */
 		const taskCoordinator = new TaskCoordinator();
 		this.taskCoordinator = taskCoordinator;
-		const patrolService = new PatrolService(this.app, lifecycle);
+		const patrolService = new PatrolService(this.app, lifecycle, runtime.proposals);
 		taskCoordinator.register({
 			id: 'patrol',
 			name: '定时巡检',
@@ -90,6 +90,7 @@ export default class AgentDashboardPlugin extends Plugin {
 				runtime.persistence,
 				runtime.organize,
 				runtime.audit,
+				runtime.rollback,
 				this.projectTracker,
 				projectReport,
 				visionService,
@@ -152,6 +153,24 @@ export default class AgentDashboardPlugin extends Plugin {
 				}
 				if (!checking) {
 					void this.activateDashboardView();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'rollback-active-file',
+			name: '回滚当前文件到修改前',
+			checkCallback: (checking: boolean) => {
+				const markdownView =
+					this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!markdownView || !markdownView.file) {
+					return false;
+				}
+				if (!checking) {
+					void runtime.rollback(markdownView.file.path, createRequestContext('user')).then((result) => {
+						new Notice(result.message);
+					});
 				}
 				return true;
 			},
@@ -254,6 +273,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	async saveSettings(): Promise<void> {
 		await this.saveData(this.settings);
 		this.projectTracker?.setRepos(this.settings.projectTracker.repos);
+		this.projectTracker?.setToken(this.settings.projectTracker.githubToken);
 	}
 
 	private refreshDashboardViews(forceFeeds = false): void {

@@ -10,9 +10,9 @@
 - **项目名称**：墨忆台 Memory Workbench（Obsidian 插件，内部包名 `agent-dashboard`）
 - **GitHub 仓库**：https://github.com/MuMu-bee/tt
 - **本地项目目录**：`E:/TT/workbuddy工作/2026-08-08-12-17-00`
-- **当前分支**：`feat/memory-workbench-foundation`
-- **PR**：https://github.com/MuMu-bee/tt/pull/1 （状态 OPEN，目标分支 `main`，尚未合并）
-- **基线提交**：`4f361e9`（feat: knowledge graph, daily hot, page redesign, and Obsidian CSS variable migration）
+- **当前分支**：`main`
+- **PR**：https://github.com/MuMu-bee/tt/pull/1 （**已合并** 2026-08-15）
+- **基线提交**：`4f361e9`（feat: knowledge graph, daily hot, page redesign, and Obsidian CSS variable migration）——注意：`main` 已有后续大量提交，本文档第三节的"当前状态"以仓库 HEAD 为准
 - **用户画像**：项目所有者是编程小白，所有交付要面向可操作结果，不要让他自己排查代码
 
 ## 二、这个项目是什么
@@ -43,19 +43,20 @@
 - **每日热点**：6 条热点卡片，排名 + 分类标签 + 热度数据
 - **页面切换**：8 页面导航（总览/知识库/知识星图/任务与计划/项目追踪/每日热点/对话/设置），`showPage()` 机制
 - **CSS 重写**：使用 Obsidian 原生 CSS 变量替代自定义 `--agent-*` 变量，自动跟随主题
-- **全量测试 92/92 PASS**（`npm test`），build / tsc / lint（0 errors）/ git diff --check 全部通过
+- **测试 92 个用例**（`npm test` 清单见 package.json；文档中出现的 92/92、53/53、41/41 等数字是不同时点的快照，以实际运行结果为准），build / tsc / lint / git diff --check 通过
 - 已部署到本地 Obsidian vault（junction 链接：`C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/` → `deploy/`）
 - 已推送到 GitHub：`4f361e9` 在 `feat/memory-workbench-foundation` 分支
 
-### 尚未完成 / 已知缺口
-1. **真实桌面 smoke test 未跑**：35 项人工验证清单见 `docs/inkmemory/DESKTOP-SMOKE-TEST-CHECKLIST.md`，需在真实 Obsidian 中逐项验证
-2. **PR #1 未合并**：必须等用户明确指示
-3. **知识星图连接数据取决于笔记内容**：星图使用真实 `[[wikilinks]]` 数据，若笔记间无链接则星图只有孤立节点
-4. **每日热点数据为模拟数据**：当前使用硬编码热点，未接入真实公开 API（需找稳定公开 API）
-5. **lint 有 18 个既有 warning**（既有代码，非本轮引入）
-6. **单端持久化**（仅 Vault 内 JSONL），非双端；`pending-compensation` 仅为状态标识，非真实补偿队列
-7. **后台研究为基础版**：支持搜索网络生成报告，但缺少排队/暂停/重试等高级功能
-8. **定时巡检为基础版**：每 30 分钟检查一次，缺少断链检测和主动建议
+### 尚未完成 / 已知缺口（截至 2026-08-15，与仓库 HEAD 一致）
+1. **真实桌面 smoke test 未跑**：40 项人工验证清单见 `docs/inkmemory/DESKTOP-SMOKE-TEST-CHECKLIST.md`，需在真实 Obsidian 中逐项验证
+2. **知识星图连接数据取决于笔记内容**：星图使用真实 `[[wikilinks]]` 数据，若笔记间无链接则星图只有孤立节点
+3. **每日热点已接真实 API**（vvhan 聚合 + 知乎热榜，双源轮换），失败时显示失败提示而非模拟数据
+4. **lint 有既有 warning**（既有代码；数量以实际运行 `npm run lint` 为准）
+5. **持久化**：Proposal/Approval 为 Vault 单端 JSONL；Audit 为双端（Vault + 插件数据目录镜像）；审计落盘/镜像失败会标记 `pending-compensation`，可在工作台审计区重试
+6. **后台研究为基础版**：支持搜索网络生成报告、任务取消与重试；排队/暂停未实现
+7. **定时巡检为基础版**：每 30 分钟检查一次，含断链检测与过期 proposal 标记；主动建议未实现
+8. **Hermes 记忆发布**（MemoryPublishService）服务存在但未接入 UI/命令
+9. **回滚功能**已接入：已应用（applied）的 proposal 可在工作台一键回滚，另有"回滚当前文件"命令
 
 ## 四、技术栈与架构
 
@@ -101,7 +102,7 @@ Vault Markdown
 
 ## 五、硬性约束（违反即事故）
 
-1. 只改 `feat/memory-workbench-foundation` 分支；**不得**合并 PR #1、不得 push/修改 `main`
+1. 当前开发分支为 `main`；新改动请走新分支 + PR，**不要直接 push `main`**（除非用户明确要求）
 2. **不得自动 commit / push**，除非用户明确要求
 3. 禁止提交：`.workbuddy/`、`overview.md`、`handoff-prompt.md`、临时文件（如 `qa_check_mainjs.py`、`test-output.txt`）
 4. `main.js` 被 `.gitignore` 排除（构建产物不入库，符合 Obsidian 规范；发布走 GitHub Releases）

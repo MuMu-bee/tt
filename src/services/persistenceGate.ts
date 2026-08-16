@@ -4,10 +4,12 @@ import type { PersistenceRestoreReport, RestorablePersistenceStore } from '../po
 
 export class PersistenceGate {
   private current: PersistenceRuntimeStatus;
+  private readonly writeEnabled: () => boolean;
 
-  constructor(writeEnabled: boolean) {
+  constructor(writeEnabled: boolean | (() => boolean)) {
+    this.writeEnabled = typeof writeEnabled === 'function' ? writeEnabled : () => writeEnabled;
     const unavailable: PersistenceRestoreReport = { available: false, loaded: false, skipped_rows: 0, error: 'persistence not restored' };
-    this.current = { restored: false, write_enabled: writeEnabled, degraded: true, stores: { proposals: unavailable, approvals: unavailable, audit: unavailable } };
+    this.current = { restored: false, write_enabled: this.writeEnabled(), degraded: true, stores: { proposals: unavailable, approvals: unavailable, audit: unavailable } };
   }
 
   async restore(stores: { proposals: RestorablePersistenceStore; approvals: RestorablePersistenceStore; audit: RestorablePersistenceStore }, context: RequestContext): Promise<PersistenceRuntimeStatus> {
@@ -18,10 +20,10 @@ export class PersistenceGate {
     ]);
     const restored = proposals.loaded && approvals.loaded && audit.loaded;
     const available = proposals.available && approvals.available && audit.available;
-    this.current = { restored, write_enabled: this.current.write_enabled, degraded: !restored || !available, stores: { proposals, approvals, audit } };
+    this.current = { restored, write_enabled: this.writeEnabled(), degraded: !restored || !available, stores: { proposals, approvals, audit } };
     return this.current;
   }
 
-  isWritable(): boolean { return this.current.write_enabled && this.current.restored && !this.current.degraded; }
+  isWritable(): boolean { return this.writeEnabled() && this.current.restored && !this.current.degraded; }
   status(): PersistenceRuntimeStatus { return this.current; }
 }

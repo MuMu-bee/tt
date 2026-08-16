@@ -1,4 +1,4 @@
-import { ItemView, Notice, normalizePath, requestUrl, setIcon, TFile } from 'obsidian';
+import { ItemView, Notice, requestUrl, setIcon, TFile } from 'obsidian';
 import type { WorkspaceLeaf } from 'obsidian';
 import type {
 	DashboardAction,
@@ -7,7 +7,7 @@ import type {
 	RepoSnapshot,
 	TaskStatus,
 } from '../data/dashboardTypes';
-import { DASHBOARD_ACTIONS, WORKBENCH_DIRS } from '../data/dashboardTypes';
+import { DASHBOARD_ACTIONS } from '../data/dashboardTypes';
 import { AgentActionService, showActionError } from '../services/agentActionService';
 import { ChatService } from '../services/chatService';
 import { DashboardService } from '../services/dashboardService';
@@ -57,6 +57,8 @@ interface HotItem {
 /** Read-only audit query surface injected by the runtime. */
 export interface AuditQueryPort {
 	listRecent(limit: number, context: RequestContext): Promise<AuditRecord[]>;
+	listPendingCompensation(context: RequestContext): Promise<AuditRecord[]>;
+	retry(recordId: string, context: RequestContext): Promise<import('../application/contracts').AuditWriteStatus>;
 }
 
 const NAV_ITEMS = [
@@ -89,9 +91,7 @@ export class AgentDashboardView extends ItemView {
 	private runningAction: string | null = null;
 	private searchQuery = '';
 	private taskListEl: HTMLElement | null = null;
-	private feedListEl: HTMLElement | null = null;
 	private taskFilterEmptyEl: HTMLElement | null = null;
-	private feedFilterEmptyEl: HTMLElement | null = null;
 	private knowledgeResultsEl: HTMLElement | null = null;
 	private knowledgeStatusEl: HTMLElement | null = null;
 	private knowledgeQuery = '';
@@ -117,6 +117,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private readonly persistence: PersistenceRuntimeStatus;
 	private readonly organize: OrganizeService;
 	private readonly audit: AuditQueryPort;
+	private readonly rollback: (path: string, context: RequestContext) => Promise<{ rolledBack: boolean; message: string }>;
 	private readonly projectTracker: ProjectTracker;
 	private readonly projectReport: ProjectReportService;
 	private readonly visionService: VisionService;
@@ -153,6 +154,7 @@ constructor(
 			persistence: PersistenceRuntimeStatus,
 			organize: OrganizeService,
 			audit: AuditQueryPort,
+			rollback: (path: string, context: RequestContext) => Promise<{ rolledBack: boolean; message: string }>,
 			projectTracker: ProjectTracker,
 			projectReport: ProjectReportService,
 			visionService: VisionService,
@@ -172,6 +174,7 @@ constructor(
 			this.persistence = persistence;
 			this.organize = organize;
 			this.audit = audit;
+			this.rollback = rollback;
 			this.projectTracker = projectTracker;
 			this.projectReport = projectReport;
 			this.visionService = visionService;
@@ -214,9 +217,7 @@ constructor(
 		this.activeViewLabelEl = null;
 		this.feedbackEl = null;
 		this.taskListEl = null;
-		this.feedListEl = null;
 		this.taskFilterEmptyEl = null;
-		this.feedFilterEmptyEl = null;
 		this.knowledgeResultsEl = null;
 		this.knowledgeStatusEl = null;
 		this.knowledgeSearchVersion += 1;
@@ -293,9 +294,7 @@ constructor(
 		this.contentEl.empty();
 		this.contentEl.addClass('agent-dashboard-view');
 		this.taskListEl = null;
-		this.feedListEl = null;
 		this.taskFilterEmptyEl = null;
-		this.feedFilterEmptyEl = null;
 		this.workbenchStatusEl = null;
 		this.persistenceBannerEl = null;
 		this.workbenchErrorEl = null;
@@ -440,9 +439,8 @@ this.renderWelcome(overviewPage, data);
 this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-banner' });
 			this.renderPersistenceBanner();
 
-			/* 整理开关配置引导 */
-			const flags = (this as unknown as { organize: OrganizeService }).organize;
-			const isAnyEnabled = flags && typeof flags === 'object' && 'plan' in flags;
+			/* 整理开关配置引导：任一规则开关开启后不再显示 */
+			const isAnyEnabled = this.organize.isAnyRuleEnabled();
 			if (!isAnyEnabled) {
 				const guideEl = card.createDiv({ cls: 'agent-dashboard-organize-guide' });
 				guideEl.createSpan({ text: '💡 提示：生成整理方案前，请先在' });
@@ -618,6 +616,8 @@ private renderProposalList(proposals: Proposal[]): void {
 			this.renderProposalButton(actionBar, proposal, 'reject', actions.canReject, actions.disabledReason);
 		} else if (proposal.status === 'approved') {
 			this.renderProposalButton(actionBar, proposal, 'apply', actions.canApply, actions.disabledReason);
+		} else if (proposal.status === 'applied') {
+			this.renderRollbackButton(actionBar, proposal);
 		}
 		if (actions.disabledReason) {
 			actionBar.createSpan({ cls: 'agent-dashboard-proposal-disabled-reason', text: actions.disabledReason });
@@ -718,6 +718,39 @@ private renderProposalList(proposals: Proposal[]): void {
 		}
 	}
 
+	private renderRollbackButton(parent: HTMLElement, proposal: Proposal): void {
+		const button = parent.createEl('button', {
+			cls: 'agent-dashboard-proposal-button rollback',
+			attr: { type: 'button' },
+		});
+		button.createSpan({ text: '回滚' });
+		button.setAttr('title', '回滚到修改前（快照校验通过时）');
+		this.registerDomEvent(button, 'click', () => {
+			void this.handleProposalRollback(proposal, button);
+		});
+	}
+
+	private async handleProposalRollback(proposal: Proposal, button: HTMLButtonElement): Promise<void> {
+		if (button.disabled) {
+			return;
+		}
+		button.disabled = true;
+		this.setWorkbenchStatus('正在回滚 ' + proposal.target_path + '…');
+		this.setWorkbenchError('');
+		try {
+			const result = await this.rollback(proposal.target_path, createRequestContext('user'));
+			new Notice(result.message);
+			this.setWorkbenchStatus(result.rolledBack ? '已回滚：' + proposal.target_path : '回滚未执行：' + proposal.target_path);
+			if (!result.rolledBack) {
+				this.setWorkbenchError(result.message);
+			}
+			await this.refreshWorkbench();
+		} catch (error) {
+			this.setWorkbenchStatus('回滚失败');
+			this.setWorkbenchError(this.getErrorMessage(error));
+		}
+	}
+
 	private renderAuditList(records: AuditRecord[]): void {
 		const list = this.auditListEl;
 		if (!list) {
@@ -737,8 +770,28 @@ private renderProposalList(proposals: Proposal[]): void {
 				cls: `agent-dashboard-audit-result${okResult ? ' ok' : ' warn'}`,
 				text: record.result,
 			});
+			if (record.result === 'pending-compensation') {
+				const retryBtn = row.createEl('button', {
+					cls: 'agent-dashboard-audit-retry',
+					attr: { type: 'button' },
+				});
+				retryBtn.createSpan({ text: '重试' });
+				retryBtn.addEventListener('click', () => {
+					void this.handleAuditRetry(record);
+				});
+			}
 			row.createSpan({ cls: 'agent-dashboard-audit-time', text: this.formatDateTime(record.created_at) });
 		});
+	}
+
+	private async handleAuditRetry(record: AuditRecord): Promise<void> {
+		try {
+			const status = await this.audit.retry(record.audit_id, createRequestContext('user'));
+			new Notice(status === 'success' ? '补偿重试成功' : `补偿重试失败：${status}`);
+			await this.refreshWorkbench();
+		} catch (error) {
+			new Notice(this.getErrorMessage(error));
+		}
 	}
 
 private setWorkbenchStatus(message: string): void {
@@ -1246,22 +1299,13 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 		const heading = header.createDiv();
 		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '🔥 DAILY HOT', attr: { style: 'color:var(--color-orange);' } });
 		heading.createEl('h2', { text: '每日热点', attr: { style: 'font-size:20px;font-weight:700;' } });
-		heading.createEl('p', { text: '聚合公开热点，打开页面自动加载实时数据；数据源不可用时显示示例数据。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
+		heading.createEl('p', { text: '聚合公开热点，自动加载实时数据；网络不可用时显示失败提示，可点击「刷新热点」重试。', attr: { style: 'font-size:13px;color:var(--text-muted);margin-top:4px;' } });
 		const refreshBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
 		refreshBtn.createSpan({ text: '刷新热点' });
 
 		const grid = section.createDiv({ cls: 'agent-dashboard-hot-grid' });
 		grid.createDiv({ cls: 'agent-dashboard-empty-state', text: '正在加载热点…' });
 
-		/* 示例数据（数据源不可用时的兜底，避免空白页） */
-		const mockData: HotItem[] = [
-			{ rank: 1, title: '示例热点 1：AI 大模型技术新进展（示例数据，刷新后加载真实热点）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: 'AI', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
-			{ rank: 2, title: '示例热点 2：科技行业动态速览（示例数据）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: '科技', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
-			{ rank: 3, title: '示例热点 3：开发者工具与开源社区（示例数据）', desc: '这是示例数据，仅在无法连接热点数据源时显示。', category: '开发', source: '示例', heat: '—', detail: '点击「刷新热点」加载知乎实时热点；若网络不可用则保留示例。' },
-		];
-
-		/* 先展示示例，随后自动加载真实热点 */
-		this.renderHotCards(grid, mockData);
 		void this.loadHot(refreshBtn, grid);
 
 		this.registerDomEvent(refreshBtn, 'click', () => {
@@ -1321,7 +1365,8 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 				});
 			});
 			return items.length > 0 ? items : null;
-		} catch {
+		} catch (error) {
+			console.error('[agent-dashboard] vvhan 热点拉取失败', error);
 			return null;
 		}
 	}
@@ -1346,13 +1391,14 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 						desc: typeof target?.excerpt === 'string' ? target.excerpt : (isRecord(target?.titleArea) && typeof target.titleArea.text === 'string' ? target.titleArea.text : ''),
 						category: typeof feedSpecific?.currentType === 'string' ? feedSpecific.currentType : '热点',
 						source: '知乎',
-						heat: `${(typeof item.detailText === 'string' ? item.detailText.replace(/[^0-9]/g, '') : '') || '—'} 热度`,
+						heat: (typeof item.detailText === 'string' ? item.detailText.replace(/[^0-9]/g, '') : '') || '—',
 						detail: typeof target?.excerpt === 'string' ? target.excerpt : '点击查看详情',
 					});
 				});
 			}
 			return hotItems.length > 0 ? hotItems : null;
-		} catch {
+		} catch (error) {
+			console.error('[agent-dashboard] 知乎热点拉取失败', error);
 			return null;
 		}
 	}
@@ -1461,6 +1507,20 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 				}
 				if (task.error) {
 					card.createSpan({ cls: 'agent-dashboard-research-task-error', text: `❌ ${task.error}` });
+				}
+				const actionsRow = card.createDiv({ cls: 'agent-dashboard-research-task-actions' });
+				if (task.status === 'queued' || task.status === 'running') {
+					const cancelBtn = actionsRow.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+					cancelBtn.createSpan({ text: '取消' });
+					cancelBtn.addEventListener('click', () => {
+						void this.researchService.cancel(task.taskId, createRequestContext('user')).then(() => this.loadResearchTasks(taskList));
+					});
+				} else if (task.status === 'failed' || task.status === 'cancelled') {
+					const retryBtn = actionsRow.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
+					retryBtn.createSpan({ text: '重试' });
+					retryBtn.addEventListener('click', () => {
+						void this.researchService.submit(task.query, createRequestContext('user')).then(() => this.loadResearchTasks(taskList));
+					});
 				}
 			});
 		} catch {
@@ -2172,10 +2232,8 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 		}
 		const date = new Date();
 		const fileName = `项目动态-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
-		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
-		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
-		await this.app.vault.create(path, parts.join('\n\n---\n\n') + '\n');
-		return path;
+		/* 写入走服务层（ProjectReportService.writeReport），UI 不再直接触碰 Vault。 */
+		return this.projectReport.writeReport(fileName, parts.join('\n\n---\n\n') + '\n');
 	}
 
 	/** 在项目卡片内直接生成并展示 AI 中文提炼摘要（会话内缓存，避免重复调用模型）。 */
@@ -2331,21 +2389,11 @@ private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void
 		this.feedbackEl?.setText(message);
 	}
 
-	private scrollToSection(id: string): void {
-		const target = this.contentEl.querySelector<HTMLElement>(`#${id}`);
-		target?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-	}
-
 	private updateSearchVisibility(): void {
 		this.updateListSearchVisibility(
 			this.taskListEl,
 			this.taskFilterEmptyEl,
 			'.agent-dashboard-task-row',
-		);
-		this.updateListSearchVisibility(
-			this.feedListEl,
-			this.feedFilterEmptyEl,
-			'.agent-dashboard-feed-item',
 		);
 	}
 

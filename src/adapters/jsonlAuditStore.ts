@@ -39,6 +39,22 @@ export class JsonlAuditStore implements AuditStore, RestorablePersistenceStore {
       await this.flush(context);
       return 'success';
     } catch {
+      /* 内存已保存但落盘失败：标记为待补偿，可通过 retry 重试落盘。 */
+      this.records.set(record.audit_id, { ...record, result: 'pending-compensation', compensation: true });
+      return 'pending-compensation';
+    }
+  }
+
+  /** Marks an existing record as pending compensation (e.g. secondary mirror write failed). */
+  async markCompensation(auditId: string, context: RequestContext): Promise<AuditWriteStatus> {
+    await this.load(context);
+    const event = this.records.get(auditId);
+    if (!event) return 'failed';
+    this.records.set(auditId, { ...event, result: 'pending-compensation', compensation: true });
+    try {
+      await this.flush(context);
+      return 'success';
+    } catch {
       return 'failed';
     }
   }
