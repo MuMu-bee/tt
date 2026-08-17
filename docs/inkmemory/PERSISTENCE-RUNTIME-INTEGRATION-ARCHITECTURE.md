@@ -1,7 +1,9 @@
 # Persistence Runtime Integration 增量架构
 
+> **文档性质：目标架构/历史基线。** 下文描述的是该增量设计时点的现状和目标，不代表当前 `main` 已完整实现；当前状态见 [`AGENT-HANDOFF-PROMPT.md`](AGENT-HANDOFF-PROMPT.md)。
+
 > 状态：仅架构设计，不修改业务源码。  
-> 仓库：`E:/TT/workbuddy工作/2026-08-08-12-17-00`  
+> 仓库：历史设计 checkout（具体机器路径不作为当前路径）
 > 目标：把 Proposal/Approval/Audit 从生产运行时的内存实现切换为 Obsidian Vault 文本 JSONL 持久化，并建立可等待的恢复闸门。
 
 ## 1. Implementation Approach

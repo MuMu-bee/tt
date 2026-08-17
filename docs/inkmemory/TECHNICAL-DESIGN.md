@@ -1,5 +1,7 @@
 # 墨忆台技术设计（TECHNICAL-DESIGN）
 
+> **文档性质：目标技术设计/历史基线。** 这里的双端持久化、CAS、完整写入门禁等内容是设计要求，不等同于当前实现已经闭环；当前状态见 [`AGENT-HANDOFF-PROMPT.md`](AGENT-HANDOFF-PROMPT.md)。
+
 > 版本：方案二基线（2026-08-07）  
 > 设计原则：保留现有源码仓库中的 Obsidian 插件外壳和成熟 Dashboard，在其内部重构核心。  
 > 事实源：Vault 中的 Markdown；SQLite、FTS5、向量索引和模型输出均为可重建派生数据。

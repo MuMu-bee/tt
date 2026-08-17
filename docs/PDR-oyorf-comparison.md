@@ -4,6 +4,7 @@
 > 项目：agent-dashboard（墨忆台 Memory Workbench）
 > 参考：oyorf/person_dashboard (v0.1.0, MIT)
 > 原则：本篇基于源代码逐项分析，禁止虚构数据或功能
+> **文档性质：历史对比分析快照。** 文中的测试数量、功能清单和阶段判断以 2026-08-12 为准，不代表当前 `main`。当前仓库状态见 [`docs/inkmemory/AGENT-HANDOFF-PROMPT.md`](inkmemory/AGENT-HANDOFF-PROMPT.md)。
 
 ---
 
@@ -42,7 +43,7 @@ interface KeywordIndexEntry {
 
 索引是纯关键词搜索，**无图结构**。
 
-### 1.3 现有功能清单（全部已实现，92 测试通过）
+### 1.3 截至 2026-08-12 的功能快照（当时 92 个测试通过）
 
 | 功能 | 实现位置 |
 |---|---|

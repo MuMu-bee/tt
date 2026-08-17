@@ -9,32 +9,35 @@
 
 - **项目名称**：墨忆台 Memory Workbench（Obsidian 插件，内部包名 `agent-dashboard`）
 - **GitHub 仓库**：https://github.com/MuMu-bee/tt
-- **本地项目目录**：`E:/TT/workbuddy工作/2026-08-08-12-17-00`
+- **本地项目目录**：以当前 checkout 为准；本文不绑定历史机器路径
 - **当前分支**：`main`
 - **PR**：https://github.com/MuMu-bee/tt/pull/1 （**已合并** 2026-08-15）
-- **基线提交**：`4f361e9`（feat: knowledge graph, daily hot, page redesign, and Obsidian CSS variable migration）——注意：`main` 已有后续大量提交，本文档第三节的"当前状态"以仓库 HEAD 为准
+- **PR #2**：https://github.com/MuMu-bee/tt/pull/2 （**已合并** 2026-08-17）
+- **当前 HEAD**：`edbb9b2`（merge PR #2；完整 SHA 以 Git 为准）
+- **最新 Release**：`0.1.0`，tag `3f7ffc2`，早于当前 `main`
+- **历史基线提交**：`4f361e9`（feat: knowledge graph, daily hot, page redesign, and Obsidian CSS variable migration）——不代表当前 HEAD
 - **用户画像**：项目所有者是编程小白，所有交付要面向可操作结果，不要让他自己排查代码
 
 ## 二、这个项目是什么
 
 一个 Obsidian 桌面插件，做"记忆工作台"：
 - **只读知识索引与搜索**：扫描 Vault 内 Markdown 笔记，建立关键词索引，支持混合搜索（semantic 不可用时自动降级为纯关键词）
-- **整理工作台（Proposal/Approval/Audit 闭环）**：
+  - **整理工作台（Proposal/Approval/Audit 基础闭环）**：
   - 对笔记生成整理方案（补全 frontmatter / 补充标签 / 补充反向链接 / 格式规范化）
   - 方案（Proposal）持久化到 Vault 内 `_workbench/proposals/records.jsonl`
   - 单条批准/拒绝（Approval）持久化到 `_workbench/approvals/records.jsonl`
   - 执行写入（apply）前**重新读取目标文件并校验 base_hash**，hash 不一致 → 零写入，标记 conflict
-  - 所有写入经 `WriteService → WritePort → ObsidianWritePort`，UI 不直接碰 `vault.modify/create`
-  - 审计记录（Audit）持久化到 `_workbench/audit/events.jsonl`
+  - Proposal apply 核心写入经 `WriteService → WritePort → ObsidianWritePort`；其他报告、AgentAction 和回滚路径的直写缺口见当前已知问题
+  - 审计记录（Audit）持久化到 Vault 的 `_workbench/audit/events.jsonl`，并写入插件数据目录的 `audit/events.jsonl` 镜像；镜像失败进入待补偿状态
 - **安全默认**：所有整理/写入开关默认关闭；fiction / unknown 区域的方案即使批准也绝不写入（proposal-only）
 - **知识星图**：Canvas 力导向图展示笔记关联，支持图谱透镜筛选
 - **每日热点**：聚合公开热点，卡片式排名展示
 - **8 页面导航**：总览 / 知识库 / 知识星图 / 任务与计划 / 项目追踪 / 每日热点 / 对话 / 设置
 
-## 三、当前真实状态（截至 2026-08-12）
+## 三、当前真实状态（截至 2026-08-17，HEAD `edbb9b2`）
 
 ### 已完成并验证
-- 持久化 Proposal/Approval/Audit adapter 已接入生产 runtime（`runtimeComposition.ts` 使用 `JsonlProposalStore` / `JsonlApprovalStore` / `JsonlAuditStore` / `JsonlAuditSink`，不再使用内存 store）
+- 持久化 Proposal/Approval/Audit adapter 已接入生产 runtime（`runtimeComposition.ts` 使用 `JsonlProposalStore` / `JsonlApprovalStore` / `JsonlAuditStore` / `JsonlAuditSink`，不再使用内存 store）；正常恢复路径可用，但异常恢复重试和并发 flush 仍有缺口
 - `main.ts` 在 `onload` 中 `await composeRuntime(...)`，启动时执行 restore（单一路径，无双重调用）
 - 恢复失败进入 degraded：`PersistenceGate.isWritable()` 为 false 时，`WriteService` 返回 `PERSISTENCE_DEGRADED`，`ProposalApplyService.apply` 同样被阻断
 - 坏 JSONL 行跳过并计数（skipped_rows），空文件/目录不存在安全处理
@@ -43,11 +46,11 @@
 - **每日热点**：6 条热点卡片，排名 + 分类标签 + 热度数据
 - **页面切换**：8 页面导航（总览/知识库/知识星图/任务与计划/项目追踪/每日热点/对话/设置），`showPage()` 机制
 - **CSS 重写**：使用 Obsidian 原生 CSS 变量替代自定义 `--agent-*` 变量，自动跟随主题
-- **测试 92 个用例**（`npm test` 清单见 package.json；文档中出现的 92/92、53/53、41/41 等数字是不同时点的快照，以实际运行结果为准），build / tsc / lint / git diff --check 通过
-- 已部署到本地 Obsidian vault（junction 链接：`C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/` → `deploy/`）
-- 已推送到 GitHub：`4f361e9` 在 `feat/memory-workbench-foundation` 分支
+- **测试 101/101**（`npm test`）；`npm run build`、`tsc --noEmit -skipLibCheck`、`git diff --check` 通过；`npm run lint` 为 0 error、22 warnings
+- 当前没有本次审查范围内的真实 Obsidian 桌面 smoke test 证据；不能把 Node 测试结果当作桌面验证
+- 当前 `main` 已推送到 GitHub，HEAD 为 `edbb9b2`；`0.1.0` Release 仍来自旧 tag `3f7ffc2`
 
-### 尚未完成 / 已知缺口（截至 2026-08-15，与仓库 HEAD 一致）
+### 尚未完成 / 已知缺口（截至 2026-08-17，基于 HEAD `edbb9b2`）
 1. **真实桌面 smoke test 未跑**：40 项人工验证清单见 `docs/inkmemory/DESKTOP-SMOKE-TEST-CHECKLIST.md`，需在真实 Obsidian 中逐项验证
 2. **知识星图连接数据取决于笔记内容**：星图使用真实 `[[wikilinks]]` 数据，若笔记间无链接则星图只有孤立节点
 3. **每日热点已接真实 API**（vvhan 聚合 + 知乎热榜，双源轮换），失败时显示失败提示而非模拟数据
@@ -57,6 +60,11 @@
 7. **定时巡检为基础版**：每 30 分钟检查一次，含断链检测与过期 proposal 标记；主动建议未实现
 8. **Hermes 记忆发布**（MemoryPublishService）服务存在但未接入 UI/命令
 9. **回滚功能**已接入：已应用（applied）的 proposal 可在工作台一键回滚，另有"回滚当前文件"命令
+10. **写入边界仍有缺口**：Proposal apply 核心路径经过 WriteService，但日报、研究/图片报告、AgentAction 和回滚仍存在 Vault 直写路径
+11. **scope/Proposal 仍需加固**：WriteService 未完整验证 `scope_snapshot`，Proposal 未保存原始 scope snapshot，apply 时会重建为 file scope
+12. **Audit/JSONL 并发与恢复仍需加固**：同文件 read-modify-write、restore 失败重试、Audit retry 失败后的 pending 保留、双端镜像恢复尚未形成完整闭环
+13. **semantic scope 与增量更新仍有缺口**：内容修改 hash、tag scope、includes 和 prefix 边界需要补充实现与测试
+14. **CI 门禁未建立**：当前 workflow 仅处理 tag 发布，PR/main 没有自动测试门禁，`main` 也未启用 branch protection
 
 ## 四、技术栈与架构
 
@@ -96,7 +104,8 @@ Vault Markdown
       ├─ 不一致 → conflict，零写入
       └─ fiction/unknown → proposal-only，零写入
   → IndexLifecycleService.modify（刷新索引）
-  → JsonlAuditSink → JsonlAuditStore（审计）
+  → JsonlAuditSink → JsonlAuditStore（Vault 审计主记录）
+      └─ DualJsonlStorage（插件数据目录镜像；失败标记 pending-compensation）
   → 启动时 await restore；失败 → degraded → 阻断 apply/write
 ```
 
@@ -116,24 +125,24 @@ Vault Markdown
 ## 六、接手后的标准动作
 
 1. **读代码**：先读第三节列出的关键文件，再读 `docs/inkmemory/PDR.md`、`TECHNICAL-DESIGN.md`、`PERSISTENCE-RUNTIME-INTEGRATION-ARCHITECTURE.md`、`DESKTOP-SMOKE-TEST-CHECKLIST.md`
-2. **跑基线**：`npm test`、`npm run build`、`npm run lint`、`tsc --noEmit -skipLibCheck`、`git diff --check`，确认 53/53 与全绿
+2. **跑基线**：`npm test`、`npm run build`、`npm run lint`、`tsc --noEmit -skipLibCheck`、`git diff --check`，以实际输出为准；当前基线为 101/101、lint 0 error/22 warnings
 3. **核验 runtime**：确认 `runtimeComposition.ts` 使用 JSONL 持久化 adapter、`main.ts` 单条 restore 路径、feature flags 默认关闭
-4. **检查部署**：确认 `C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/` 下的 main.js 是否与最新源码一致（不一致需重新 build 并复制）
-5. **向用户确认**：让用户在真实 Obsidian 中打开工作台验证「整理工作台」区块；按 35 项清单逐步验证
+4. **检查部署**：在用户指定的真实 Obsidian Vault 中确认插件构建产物是否与最新源码一致；本文件不把历史机器路径当作当前部署证据
+5. **向用户确认**：让用户在真实 Obsidian 中打开工作台验证「整理工作台」区块；按当前 `DESKTOP-SMOKE-TEST-CHECKLIST.md` 逐步验证
 6. **汇报**：用简体中文，区分"已真实验证"与"仅测试通过"，不夸大
 
 ## 七、常见命令速查
 
 ```bash
-cd "E:/TT/workbuddy工作/2026-08-08-12-17-00"
-npm test                      # 53/53
-npm run build                 # 生成 main.js（构建产物，gitignore）
-npm run lint                  # 0 errors / 10 warnings（既有）
+# 在当前 checkout 的仓库根目录执行
+npm test                      # 当前基线 101/101，以实际输出为准
+npm run build                 # 生成 deploy/main.js（构建产物，gitignore）
+npm run lint                  # 当前基线 0 errors / 22 warnings，以实际输出为准
 node node_modules/typescript/bin/tsc -noEmit -skipLibCheck
 git diff --check
 # 部署到 Obsidian（构建后）：
-# 复制 main.js / manifest.json / styles.css 到
-# C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/
+# 复制 deploy/main.js / manifest.json / styles.css 到用户指定的
+# Vault/.obsidian/plugins/agent-dashboard/
 ```
 
 ---
