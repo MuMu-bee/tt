@@ -17,9 +17,11 @@ const SNAPSHOTS_DIR = '_workbench/snapshots/';
 /** Saves before/after snapshots on writes and provides rollback. */
 export class RollbackService {
 	private readonly app: App;
+	private readonly auditSink?: import('../ports/auditSink').AuditSink;
 
-	constructor(app: App) {
+	constructor(app: App, auditSink?: import('../ports/auditSink').AuditSink) {
 		this.app = app;
+		this.auditSink = auditSink;
 	}
 
 	/** Saves a snapshot before applying a write. */
@@ -63,6 +65,22 @@ export class RollbackService {
 				}
 
 				await this.app.vault.modify(target, entry.before);
+				if (this.auditSink) {
+					try {
+						await this.auditSink.append({
+							request_id: context.request_id,
+							actor: context.actor,
+							action: 'rollback',
+							path,
+							before_hash: entry.after_hash,
+							after_hash: entry.before_hash,
+							result: 'rollback',
+							created_at: new Date().toISOString(),
+						}, context);
+					} catch {
+						/* 审计失败不影响回滚本身 */
+					}
+				}
 				return { rolledBack: true, message: `已回滚 ${path} 到修改前状态` };
 			}
 			return { rolledBack: false, message: `未找到 ${path} 的回滚快照` };

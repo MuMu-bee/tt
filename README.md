@@ -7,8 +7,8 @@ Obsidian 插件，为知识库提供只读索引、关键词优先搜索、整�
 - **版本号**：0.1.0
 - **桌面专用**：`isDesktopOnly: true`（暂不支持移动端）
 - **内部包名**：`agent-dashboard`（历史遗留，产品已更名为墨忆台）
-- **分支**：`feat/memory-workbench-foundation`
-- **基线提交**：`5586f4a feat: add v0.2 hybrid search and safe writes`
+- **分支**：`main`（PR #1 已合并）
+- **基线提交**：`5586f4a feat: add v0.2 hybrid search and safe writes`（后续版本均在其上迭代）
 
 ## 核心能力
 
@@ -22,7 +22,8 @@ Obsidian 插件，为知识库提供只读索引、关键词优先搜索、整�
 ### 整理计划与安全写入
 
 - 四类整理规则：`frontmatter-add`、`tag-add`、`bidirectional-link-add`、`format-normalize`
-- 所有整理规则默认关闭，需用户在设置中开启
+- `bidirectional-link-add` 仅在笔记 frontmatter 设置了 `related` 字段时生成（指向 related 笔记，自链接自动跳过）
+- 所有整理规则默认关闭，需用户在设置中开启；设置改动即时生效，无需重载插件
 - 整理计划生成真实 before/after/diff，不含虚假变更
 - Proposal 持久化到 Vault 内 JSONL 文件
 
@@ -47,7 +48,7 @@ OrganizePlan
 - 恢复失败进入 degraded 状态
 - degraded 状态阻断审批和写入，但 Dashboard 和搜索仍可用
 - 重启恢复不会自动 apply
-- 当前为**单端持久化**（Vault 内 JSONL），非双端
+- **持久化现状**：Proposal/Approval 为 Vault 内 JSONL 单端；Audit 为双端（Vault + 插件数据目录镜像）。审计落盘失败或镜像失败会标记为 `pending-compensation`，可在工作台审计区重试
 
 ## 安全边界
 
@@ -102,14 +103,14 @@ npm run dev    # 监听模式编译
 npm run build  # tsc 类型检查 + esbuild 打包
 ```
 
-构建产物：
-- `main.js` — 插件主入口
+构建产物（输出到 `deploy/` 目录）：
+- `deploy/main.js` — 插件主入口
 - `manifest.json` — 插件清单
 - `styles.css` — 样式文件
 
 ### 手动安装
 
-将 `main.js`、`manifest.json`、`styles.css` 复制到 Vault 的 `.obsidian/plugins/agent-dashboard/` 目录，然后在 Obsidian 设置中启用插件。
+将 `deploy/main.js`、`manifest.json`、`styles.css` 复制到 Vault 的 `.obsidian/plugins/agent-dashboard/` 目录，然后在 Obsidian 设置中启用插件。
 
 ### 测试
 
@@ -176,8 +177,10 @@ tests/
 
 ## 已知限制
 
-- `pending-compensation` 目前仅为状态标识，不是完整的补偿队列
-- 持久化为单端（Vault 内 JSONL），非双端
+- `pending-compensation` 支持：审计落盘失败/镜像失败 → 标记待补偿 → 工作台重试；Proposal/Approval 尚无补偿队列
+- Proposal/Approval 持久化为 Vault 单端；仅 Audit 双端
+- 后台研究任务不支持排队/暂停（可取消与重试）
+- Hermes 记忆发布（MemoryPublishService）尚未接入 UI/命令
 - 桌面 smoke test 尚未在真实 Obsidian 环境中运行
 - 移动端不支持
 

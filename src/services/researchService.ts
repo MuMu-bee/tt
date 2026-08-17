@@ -2,7 +2,7 @@ import { App, requestUrl, normalizePath } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
 import { WORKBENCH_DIRS } from '../data/dashboardTypes.ts';
-import type { ResearchPort, ResearchTask, ResearchSource } from '../ports/researchPort.ts';
+import type { ResearchPort, ResearchTask, ResearchSource, ResearchTaskStatus } from '../ports/researchPort.ts';
 
 const SEARCH_API = 'https://api.duckduckgo.com/?q=%s&format=json&no_html=1';
 /** 生成报告文件名时查询词截断长度。 */
@@ -71,6 +71,10 @@ export class ResearchService implements ResearchPort {
 		task.status = 'running';
 		const sources: ResearchSource[] = [];
 
+		/* cancel() 可能在任何 await 之后修改 task.status，TS 的收窄在这里不可靠，
+		   因此每次检查都通过宽类型重新读取当前状态。 */
+		const isCancelled = (): boolean => (task as { status: ResearchTaskStatus }).status === 'cancelled';
+
 		/* FR-022: sensitive content check before outbound request */
 		const sensitiveHits = SENSITIVE_PATTERNS.filter((s) => s.pattern.test(task.query));
 		if (sensitiveHits.length > 0) {
@@ -80,9 +84,13 @@ export class ResearchService implements ResearchPort {
 		}
 
 		try {
+			/* 协作式取消：任何 await 之后都检查取消状态，已取消的任务不再继续写结果。 */
+			if (isCancelled()) return;
+
 			/* Search the web */
 			const searchUrl = SEARCH_API.replace('%s', encodeURIComponent(task.query));
 			const response = await this.requestUrl({ url: searchUrl, method: 'GET' });
+			if (isCancelled()) return;
 
 			if (response.status === 200) {
 				const data: unknown = response.json;
@@ -115,12 +123,18 @@ export class ResearchService implements ResearchPort {
 			const reportPath = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
 			await this.app.vault.create(reportPath, content);
 
+			/* 最终确认：写入完成后若已被取消，不把取消覆盖为 completed。 */
+			if (isCancelled()) return;
+
 			task.result = { summary, sources, reportPath };
 			task.status = 'completed';
 			task.completedAt = new Date().toISOString();
 		} catch (error) {
-			task.status = 'failed';
-			task.error = error instanceof Error ? error.message : '研究任务失败';
+			/* 已取消的任务保持 cancelled，不被异常覆盖为 failed。 */
+			if (!isCancelled()) {
+				task.status = 'failed';
+				task.error = error instanceof Error ? error.message : '研究任务失败';
+			}
 		}
 	}
 

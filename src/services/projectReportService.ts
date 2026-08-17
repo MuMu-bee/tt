@@ -1,4 +1,6 @@
-import type { RepoSnapshot } from '../data/dashboardTypes';
+import { normalizePath } from 'obsidian';
+import type { RepoSnapshot, } from '../data/dashboardTypes';
+import { WORKBENCH_DIRS } from '../data/dashboardTypes';
 import type { ModelPort } from '../ports/modelPort';
 import type { RequestContext } from '../application/requestContext';
 import { buildProjectReportPrompt } from '../application/githubTracker';
@@ -14,9 +16,22 @@ export interface ProjectReportResult {
  */
 export class ProjectReportService {
 	private readonly model: ModelPort;
+	private readonly app?: import('obsidian').App;
 
-	constructor(model: ModelPort) {
+	constructor(model: ModelPort, app?: import('obsidian').App) {
 		this.model = model;
+		this.app = app;
+	}
+
+	/** Writes a markdown report under Reports/. Vault writes go through the service, not the UI. */
+	async writeReport(fileName: string, content: string): Promise<string> {
+		if (!this.app) {
+			throw new Error('报告写入服务未初始化');
+		}
+		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
+		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
+		await this.app.vault.create(path, content);
+		return path;
 	}
 
 	async generateReport(

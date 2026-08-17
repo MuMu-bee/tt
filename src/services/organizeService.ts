@@ -25,8 +25,14 @@ export class OrganizeService {
     return { plan_id: createRequestId(), request_id: context.request_id, changes, scope_snapshot: snapshot, created_at: new Date().toISOString() };
   }
   private enabled(kind: ChangeKind): boolean { if (kind === 'frontmatter-add') return this.flags.organize.frontmatter; if (kind === 'tag-add') return this.flags.organize.tags; if (kind === 'bidirectional-link-add') return this.flags.organize.links; return this.flags.organize.format; }
+
+  /** True when at least one organize rule is enabled in settings (used by the UI guide). */
+  isAnyRuleEnabled(): boolean {
+    return this.flags.organize.frontmatter || this.flags.organize.tags || this.flags.organize.links || this.flags.organize.format;
+  }
   private createChange(note: NoteRecord, kind: ChangeKind): PlannedChange | null {
-    const result = createChangeDiff(note, kind, kind === 'bidirectional-link-add' ? { linkTarget: note.title } : {});
+    /* 双向链接只在存在真实 related 目标时生成（changeDiff 内部处理自链接拦截）；不再把笔记自身标题当目标。 */
+    const result = createChangeDiff(note, kind);
     if (!result) return null;
     const proposalOnly = note.zone === 'fiction' || note.zone === 'unknown';
     return { path: note.path, kind, before: result.before, after: result.after, diff: result.diff, reason: proposalOnly ? 'zone requires proposal only' : 'whitelisted organizer rule', status: proposalOnly ? 'proposal_only' : 'planned', before_hash: note.hash, zone: note.zone };

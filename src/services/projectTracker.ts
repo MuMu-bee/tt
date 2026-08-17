@@ -36,7 +36,7 @@ function apiHeaders(token?: string): Record<string, string> {
  */
 export class ProjectTracker {
 	private readonly cache: CacheStore;
-	private readonly token: string;
+	private token: string;
 	private repos: string[];
 
 	constructor(cache: CacheStore, token: string, repos: string[]) {
@@ -51,6 +51,11 @@ export class ProjectTracker {
 
 	setRepos(repos: string[]): void {
 		this.repos = [...repos];
+	}
+
+	/** Updates the GitHub token at runtime so settings changes apply without reloading the plugin. */
+	setToken(token: string): void {
+		this.token = token;
 	}
 
 	async refresh(repo: string, force = false): Promise<RepoSnapshot> {

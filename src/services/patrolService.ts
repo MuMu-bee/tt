@@ -19,10 +19,12 @@ const MAX_ISSUE_SAMPLES = 10;
 export class PatrolService {
 	private readonly app: App;
 	private readonly lifecycle: IndexLifecycleService;
+	private readonly proposals?: import('./proposalService.ts').ProposalService;
 
-	constructor(app: App, lifecycle: IndexLifecycleService) {
+	constructor(app: App, lifecycle: IndexLifecycleService, proposals?: import('./proposalService.ts').ProposalService) {
 		this.app = app;
 		this.lifecycle = lifecycle;
+		this.proposals = proposals;
 	}
 
 	async patrol(context: RequestContext = createRequestContext('background-task')): Promise<PatrolReport> {
@@ -51,6 +53,37 @@ export class PatrolService {
 
 			if (report.missingFrontmatter > 0) {
 				report.issues.push(`共 ${report.missingFrontmatter} 篇笔记缺少 frontmatter`);
+			}
+
+			/* Broken link detection: count unresolved [[wikilinks]] targets from Obsidian's metadata cache. */
+			const unresolved = this.app.metadataCache.unresolvedLinks ?? {};
+			let brokenLinkCount = 0;
+			const brokenSamples: string[] = [];
+			for (const [sourcePath, targets] of Object.entries(unresolved)) {
+				if (!sourcePath.toLocaleLowerCase().endsWith('.md')) continue;
+				for (const target of Object.keys(targets ?? {})) {
+					brokenLinkCount += 1;
+					if (brokenSamples.length < MAX_ISSUE_SAMPLES) {
+						brokenSamples.push(`${sourcePath} -> [[${target}]]`);
+					}
+				}
+			}
+			report.brokenLinks = brokenLinkCount;
+			if (brokenLinkCount > 0) {
+				report.issues.push(`发现 ${brokenLinkCount} 条断链`);
+				for (const sample of brokenSamples) {
+					report.issues.push(`  断链：${sample}`);
+				}
+			}
+
+			/* Expired proposals: mark overdue pending/approved proposals as expired and report them. */
+			if (this.proposals) {
+				const context = createRequestContext('background-task');
+				const expiredCount = await this.proposals.expireOverdue(context);
+				report.expiredProposals = expiredCount;
+				if (expiredCount > 0) {
+					report.issues.push(`${expiredCount} 条 proposal 已过期并标记`);
+				}
 			}
 
 			if (report.noteCount === 0) {

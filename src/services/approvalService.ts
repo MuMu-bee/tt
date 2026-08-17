@@ -18,6 +18,11 @@ export class ApprovalService {
     const proposal = await this.proposals.get(proposalId, context);
     if (!proposal) throw new Error('proposal not found');
     if (proposal.status !== 'pending') throw new Error(`proposal is not pending: ${proposal.status}`);
+    /* 过期检查：过期的 pending proposal 不允许再审批。 */
+    if (proposal.expires_at && Date.parse(proposal.expires_at) < Date.now()) {
+      await this.proposals.updateStatus(proposalId, 'expired', context.child ? context.child() : context);
+      throw new Error('proposal has expired');
+    }
     const record: ApprovalRecord = { approval_id: createRequestId(), proposal_id: proposalId, request_id: context.request_id, decision, actor: 'user', decided_at: new Date().toISOString(), ...(note ? { note } : {}) };
     await this.approvals.save(record, context.child ? context.child() : context);
     const status: ProposalStatus = decision === 'approve' ? 'approved' : 'rejected';

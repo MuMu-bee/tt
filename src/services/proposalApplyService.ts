@@ -27,7 +27,21 @@ export class ProposalApplyService {
     this.snapshotHook = snapshotHook;
     this.auditSink = auditSink;
   }
+  private readonly applyQueues = new Map<string, Promise<unknown>>();
+
+  /** Serializes apply per proposal so concurrent calls cannot double-write. */
   async apply(proposalId: string, context: RequestContext): Promise<ProposalApplyResult> {
+    const previous = this.applyQueues.get(proposalId) ?? Promise.resolve();
+    const next = previous.catch(() => undefined).then(() => this.applyNow(proposalId, context));
+    this.applyQueues.set(proposalId, next);
+    try {
+      return await next;
+    } finally {
+      if (this.applyQueues.get(proposalId) === next) this.applyQueues.delete(proposalId);
+    }
+  }
+
+  private async applyNow(proposalId: string, context: RequestContext): Promise<ProposalApplyResult> {
     if (this.persistenceGate && !this.persistenceGate.isWritable()) {
       return { path: '', status: 'failed', before_hash: '', error_code: 'PERSISTENCE_DEGRADED', proposal_status: 'failed' };
     }
@@ -38,6 +52,11 @@ export class ProposalApplyService {
       /* 未授权的 apply 尝试也留审计痕迹。 */
       await this.auditSkipped(proposal, 'skipped', context);
       return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: proposal.status };
+    }
+    /* 过期检查：已过期的 approved proposal 不允许 apply。 */
+    if (proposal.expires_at && Date.parse(proposal.expires_at) < Date.now()) {
+      await this.proposals.updateStatus(proposalId, 'expired', context);
+      return { path: proposal.target_path, status: 'skipped', before_hash: proposal.base_hash, proposal_status: 'expired' };
     }
     if (proposal.target_zone === 'fiction' || proposal.target_zone === 'unknown') { await this.proposals.updateStatus(proposalId, 'failed', context); return { path: proposal.target_path, status: 'proposal_only', before_hash: proposal.base_hash, error_code: 'FICTION_PROPOSAL_ONLY', proposal_status: 'failed' }; }
     const approval = await this.approvals.getForProposal(proposalId, context);

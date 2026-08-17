@@ -1,5 +1,9 @@
 import type { RequestContext } from './requestContext';
 
+/*
+ * 注意：当前版本未接入任何调用方（无引用）。保留用于未来"可观测性"
+ * 需求接入（搜索/整理/写入统一 request_id 日志）。接入前请勿宣称已启用。
+ */
 export type OperationStatus = 'started' | 'succeeded' | 'failed';
 
 export interface OperationLog {
