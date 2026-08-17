@@ -1,5 +1,7 @@
 # 阶段 0 系统设计：端口化边界与 Hermes 移除
 
+> **文档性质：阶段 0 目标设计/历史方案。** 文中的“当前”指设计编写时点；文件清单、端口和验收标准是目标，不是当前源码已全部具备的证明。当前 `main` 状态见 [`inkmemory/AGENT-HANDOFF-PROMPT.md`](inkmemory/AGENT-HANDOFF-PROMPT.md)。
+
 ## 1. 实现方案
 
 ### 技术难点

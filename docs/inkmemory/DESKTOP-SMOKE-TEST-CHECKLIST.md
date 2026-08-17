@@ -2,11 +2,12 @@
 
 > 本清单面向非编程用户，用于在真实 Obsidian 桌面环境中逐步验证插件功能。
 > 每一步请按顺序执行，并在对应栏目填写结果：PASS / FAIL / BLOCKED。
+> 本清单只提供操作步骤，不代表已经完成真实桌面验证；Vault 路径必须使用用户当前选择的 Vault。
 
 ## 准备工作
 
-6. 确认已构建：`npm run build`（生成 `main.js` + `styles.css`）
-7. 文件通过 junction 链接自动部署到 `C:/Users/TT/Documents/knowledge-vault/.obsidian/plugins/agent-dashboard/`
+6. 确认已构建：`npm run build`（生成 `deploy/main.js`；`manifest.json` 和 `styles.css` 位于仓库根目录）
+7. 将 `deploy/main.js`、`manifest.json` 和 `styles.css` 复制到当前 Vault 的 `.obsidian/plugins/agent-dashboard/` 目录，或确认现有部署链接指向 `deploy/`
 8. 打开 Obsidian，进入 设置 → 第三方插件，关闭"安全模式"
 9. 在插件列表中找到"墨忆台 Memory Workbench"，点击启用
 
@@ -28,7 +29,7 @@
 
 | # | 操作 | 期望结果 | 实际结果 |
 |---|------|---------|---------|
-| 1 | 将 main.js / manifest.json / styles.css 复制到插件目录 | 文件复制成功，无报错 | |
+| 1 | 将 `deploy/main.js` / manifest.json / styles.css 复制到插件目录 | 文件复制成功，无报错 | |
 | 2 | 在设置中启用插件 | 插件启用，无红色错误提示 | |
 | 3 | 观察 Obsidian 是否报错 | 控制台无报错（按 Ctrl+Shift+I 打开开发者工具查看 Console 标签） | |
 | 4 | 点击左侧栏的仪表盘图标，或使用命令面板搜索"打开智能体工作台" | Dashboard 面板可正常打开，显示界面 | |
@@ -96,7 +97,7 @@
 | # | 操作 | 期望结果 | 实际结果 |
 |---|------|---------|---------|
 | 33 | 确认 semantic_search 开关为关闭状态，然后启动插件 | 插件正常启动，搜索使用关键词模式 | |
-| 34 | 检查项目依赖 | 没有新增 child_process / spawn / terminal 依赖（查看 main.js 中不含这些调用） | |
+| 34 | 检查项目依赖 | 没有新增 child_process / spawn / terminal 依赖（查看 `deploy/main.js` 中不含这些调用） | |
 | 35 | 在搜索框输入 proposal 或 audit 相关关键词 | 搜索结果中不出现 `_workbench/` 目录下的 JSONL 记录 | |
 
 ---
