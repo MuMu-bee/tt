@@ -1,6 +1,7 @@
 import { App, normalizePath } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
+import type { AuditSink } from '../ports/auditSink.ts';
 
 export interface MemorySnapshot {
 	version: string;
@@ -23,7 +24,7 @@ const SNAPSHOTS_DIR = '_workbench/memory/';
 export class MemoryPublishService implements HermesAdapter {
 	private readonly app: App;
 
-	constructor(app: App) {
+	constructor(app: App, private readonly audit?: AuditSink) {
 		this.app = app;
 	}
 
@@ -31,6 +32,14 @@ export class MemoryPublishService implements HermesAdapter {
 		await this.app.vault.adapter.mkdir(SNAPSHOTS_DIR);
 		const path = normalizePath(`${SNAPSHOTS_DIR}${snapshot.version}.json`);
 		await this.app.vault.create(path, JSON.stringify(snapshot, null, 2));
+		await this.audit?.append({
+			request_id: context.request_id,
+			actor: context.actor,
+			action: 'memory-publish',
+			path,
+			result: 'applied',
+			created_at: new Date().toISOString(),
+		}, context);
 	}
 
 	async getLatestVersion(_context: RequestContext = createRequestContext('background-task')): Promise<MemorySnapshot | null> {
@@ -45,7 +54,7 @@ export class MemoryPublishService implements HermesAdapter {
 		}
 	}
 
-	async rollback(version: string, _context: RequestContext = createRequestContext('background-task')): Promise<void> {
+	async rollback(version: string, context: RequestContext = createRequestContext('background-task')): Promise<void> {
 		/* Keep the snapshot but mark it as rolled back */
 		const path = normalizePath(`${SNAPSHOTS_DIR}${version}.json`);
 		try {
@@ -56,6 +65,14 @@ export class MemoryPublishService implements HermesAdapter {
 		} catch {
 			throw new Error(`无法回滚版本 ${version}：快照不存在`);
 		}
+		await this.audit?.append({
+			request_id: context.request_id,
+			actor: context.actor,
+			action: 'memory-rollback',
+			path,
+			result: 'applied',
+			created_at: new Date().toISOString(),
+		}, context);
 	}
 
 	/** Generates a new snapshot from the current vault state. */

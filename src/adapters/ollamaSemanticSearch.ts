@@ -111,24 +111,40 @@ export class OllamaSemanticSearch implements SemanticSearchPort {
 			}
 		}
 
-		const missing: string[] = [];
-		for (const path of paths) {
-			if (path && !this.entries.has(path)) {
-				missing.push(path);
-			}
-		}
-
 		const childContext =
 			context.child ? context.child() : createRequestContext(context.actor, context.request_id);
+
+		/* Read once per path so unchanged notes stay cached and changed notes re-embed. */
+		const rawByPath = new Map<string, string>();
+		const missing: string[] = [];
+		for (const path of paths) {
+			if (!path || !path.toLocaleLowerCase().endsWith('.md')) {
+				continue;
+			}
+			const raw = await this.reader.readMarkdown(path, childContext);
+			rawByPath.set(path, raw);
+			const existing = this.entries.get(path);
+			if (existing && existing.rawHash === sha256Hex(raw)) {
+				continue;
+			}
+			if (existing) {
+				this.entries.delete(path);
+			}
+			missing.push(path);
+		}
+
 		for (let start = 0; start < missing.length; start += BATCH_SIZE) {
 			const batch = missing.slice(start, start + BATCH_SIZE);
 			const texts: string[] = [];
 			const parsed: Array<{ path: string; title: string; rawHash: string; content: string }> = [];
 			for (const path of batch) {
-				if (!path || !path.toLocaleLowerCase().endsWith('.md')) {
+				if (!path) {
 					continue;
 				}
-				const raw = await this.reader.readMarkdown(path, childContext);
+				const raw = rawByPath.get(path);
+				if (raw === undefined) {
+					continue;
+				}
 				const document = parseVaultDocument(path, raw);
 				const content = document.body || raw;
 				texts.push(content || path);

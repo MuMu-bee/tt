@@ -21,21 +21,35 @@ import { MemoryPublishService } from './services/memoryPublishService';
 import { TaskCoordinator } from './services/taskCoordinator';
 import { PatrolService } from './services/patrolService';
 import { CacheStore } from './services/cacheStore';
+import type { WorkbenchWriteService } from './services/workbenchWriteService';
+import { VaultMemoryStorage } from './adapters/vaultMemoryStorage';
+import { ConversationStore } from './adapters/conversationStore';
+import { AtomStore } from './adapters/atomStore';
+import { SceneStore } from './adapters/sceneStore';
+import { PersonaStore } from './adapters/personaStore';
+import { MemoryPipeline } from './services/memoryPipeline';
+import { MemoryExtractionService } from './services/memoryExtractionService';
+import { SceneExtractionService } from './services/sceneExtractionService';
+import { PersonaGenerationService } from './services/personaGenerationService';
+import { ObsidianSecretFile } from './adapters/obsidianSecretFile';
+import { applySecrets, EMPTY_SECRETS, migrateSecrets, stripSecrets, type Secrets } from './services/secretService';
 import {
 	AgentDashboardView,
 	VIEW_TYPE_AGENT_DASHBOARD,
 } from './views/AgentDashboardView';
 
 const AUTO_REPORT_POLL_MS = 60_000;
-const AUTO_REPORT_INITIAL_DELAY_MS = 30_000;
 
 export default class AgentDashboardPlugin extends Plugin {
 	settings!: AgentDashboardSettings;
 	private projectTracker!: ProjectTracker;
 	private taskCoordinator?: TaskCoordinator;
-	private delayedReportTimer: number | null = null;
+	private autoReportInFlight = false;
+	private secretFile?: ObsidianSecretFile;
+	private secrets: Secrets = EMPTY_SECRETS;
 
 	async onload(): Promise<void> {
+		this.secretFile = new ObsidianSecretFile(this.manifest.dir ?? this.app.vault.configDir + '/plugins/agent-dashboard');
 		await this.loadSettings();
 
 		const dashboardService = new DashboardService(this.app);
@@ -44,17 +58,38 @@ export default class AgentDashboardPlugin extends Plugin {
 		const lifecycle = runtime.lifecycle;
 		void lifecycle.rebuild(createRequestContext('background-task')).catch(() => undefined);
 		const model = new OpenAiModel(this.settings.agent);
-		const actionService = new AgentActionService(this.app, dashboardService, model);
-		const chatService = new ChatService(this.settings.agent, new VaultContextService(this.app, searchService));
+		const actionService = new AgentActionService(this.app, dashboardService, model, runtime.workbenchWrite);
+		const memoryStorage = new VaultMemoryStorage(this.app);
+		const conversationStore = new ConversationStore(memoryStorage);
+		const atomStore = new AtomStore(memoryStorage);
+		const sceneStore = new SceneStore(memoryStorage);
+		const personaStore = new PersonaStore(memoryStorage);
+		const memoryPipeline = new MemoryPipeline({
+			conversations: conversationStore,
+			atoms: atomStore,
+			scenes: sceneStore,
+			persona: personaStore,
+			extractor: new MemoryExtractionService(model),
+			sceneExtractor: new SceneExtractionService(model, sceneStore),
+			personaGenerator: new PersonaGenerationService(model, personaStore),
+			flags: this.settings.featureFlags.memory,
+		});
+		const chatService = new ChatService(
+			this.settings.agent,
+			new VaultContextService(this.app, searchService),
+			memoryPipeline,
+			memoryPipeline,
+			this.settings.featureFlags.memory,
+		);
 		this.projectTracker = new ProjectTracker(
 			new CacheStore(this.app.vault),
 			this.settings.projectTracker.githubToken,
 			this.settings.projectTracker.repos,
 		);
 		const projectReport = new ProjectReportService(model);
-		const visionService = new VisionService(this.app, model);
-		const researchService = new ResearchService(this.app);
-		const memoryPublish = new MemoryPublishService(this.app);
+		const visionService = new VisionService(this.app, model, runtime.workbenchWrite);
+		const researchService = new ResearchService(runtime.workbenchWrite);
+		const memoryPublish = new MemoryPublishService(this.app, runtime.auditSink);
 
 		/* V0.5: TaskCoordinator + PatrolService */
 		const taskCoordinator = new TaskCoordinator();
@@ -97,17 +132,18 @@ export default class AgentDashboardPlugin extends Plugin {
 				memoryPublish,
 				patrolService,
 				chatService,
+				runtime.workbenchWrite,
 			),
 		);
 
-		this.setupAutoProjectReport(this.projectTracker, projectReport);
+		this.setupAutoProjectReport(this.projectTracker, projectReport, runtime.workbenchWrite);
 
 		/* 过滤插件自身缓存目录（dashboard/），避免缓存写入触发无限刷新循环。 */
 		const isPluginCachePath = (path: string): boolean => path.startsWith('dashboard/');
 		this.registerEvent(this.app.vault.on('create', (file) => { if (isPluginCachePath(file.path)) return; if (isMarkdownPath(file.path)) void lifecycle.create(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
 		this.registerEvent(this.app.vault.on('modify', (file) => { if (isPluginCachePath(file.path)) return; if (isMarkdownPath(file.path)) void lifecycle.modify(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
-		this.registerEvent(this.app.vault.on('delete', (file) => { if (isPluginCachePath(file.path)) return; void lifecycle.delete(file.path); this.refreshDashboardViews(); }));
-		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { if (isPluginCachePath(file.path)) return; void lifecycle.rename(oldPath, file.path); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('delete', (file) => { if (isPluginCachePath(file.path)) return; void lifecycle.delete(file.path).catch(() => undefined); this.refreshDashboardViews(); }));
+		this.registerEvent(this.app.vault.on('rename', (file, oldPath) => { if (isPluginCachePath(file.path)) return; void lifecycle.rename(oldPath, file.path).catch(() => undefined); this.refreshDashboardViews(); }));
 		this.addCommand({ id: 'rebuild-memory-index', name: '重建知识库索引', callback: () => { void lifecycle.rebuild(createRequestContext('user')).catch(() => undefined); } });
 
 		const ribbonIcon = this.addRibbonIcon(
@@ -167,6 +203,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private setupAutoProjectReport(
 		projectTracker: ProjectTracker,
 		projectReport: ProjectReportService,
+		workbenchWrite: WorkbenchWriteService,
 	): void {
 		const dateKey = (date: Date): string =>
 			`${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -187,34 +224,44 @@ export default class AgentDashboardPlugin extends Plugin {
 		};
 
 		const runIfDue = (): void => {
-			void shouldRun().then((due) => {
-				if (!due) {
-					return;
+			if (this.autoReportInFlight) return;
+			this.autoReportInFlight = true;
+			void (async () => {
+				try {
+					const due = await shouldRun();
+					if (!due) return;
+					const repos = this.settings.projectTracker.repos;
+					const snapshots = await Promise.all(repos.map((repo) => projectTracker.refresh(repo, true)));
+					const parts: string[] = [];
+					for (const snapshot of snapshots) {
+						const result = await projectReport.generateReport(snapshot, createRequestContext('background-task'));
+						if (result.report) {
+							parts.push('# ' + snapshot.fullName + '\n\n' + result.report);
+						} else if (result.error) {
+							parts.push('# ' + snapshot.fullName + '\n\n> ' + result.error);
+						}
+					}
+					if (parts.length > 0) {
+						const result = await workbenchWrite.writeGenerated({
+							path: WORKBENCH_DIRS.reports + '/' + todayReportName(),
+							content: parts.join('\n\n---\n\n') + '\n',
+							kind: 'project',
+							context: createRequestContext('background-task'),
+						});
+						if (result.status === 'failed') {
+							console.error('[agent-dashboard] 自动日报写入失败。', result.error_code);
+						}
+					}
+				} catch {
+					/* 自动日报失败静默，避免影响插件运行 */
+				} finally {
+					this.autoReportInFlight = false;
 				}
-				const repos = this.settings.projectTracker.repos;
-				void Promise.all(repos.map((repo) => projectTracker.refresh(repo, true)))
-					.then(async (snapshots) => {
-						const parts: string[] = [];
-						for (const snapshot of snapshots) {
-							const result = await projectReport.generateReport(snapshot, createRequestContext('background-task'));
-							if (result.report) {
-								parts.push(`# ${snapshot.fullName}\n\n${result.report}`);
-							} else if (result.error) {
-								parts.push(`# ${snapshot.fullName}\n\n> ${result.error}`);
-							}
-						}
-						if (parts.length > 0) {
-							await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
-							await this.app.vault.create(`${WORKBENCH_DIRS.reports}/${todayReportName()}`, parts.join('\n\n---\n\n') + '\n');
-						}
-					})
-					.catch(() => undefined);
-			});
+			})();
 		};
 
+		runIfDue();
 		this.registerInterval(window.setInterval(runIfDue, AUTO_REPORT_POLL_MS));
-		// Also run shortly after startup if it is already due today.
-		this.delayedReportTimer = window.setTimeout(runIfDue, AUTO_REPORT_INITIAL_DELAY_MS);
 	}
 
 	async activateDashboardView(): Promise<void> {
@@ -232,27 +279,41 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	onunload(): void {
 		this.taskCoordinator?.dispose();
-		if (this.delayedReportTimer !== null) {
-			window.clearTimeout(this.delayedReportTimer);
-			this.delayedReportTimer = null;
-		}
 	}
 
 	async loadSettings(): Promise<void> {
 		const stored = (await this.loadData()) as Partial<AgentDashboardSettings> | null;
-		this.settings = {
-			...DEFAULT_SETTINGS,
-			...stored,
+		const s = stored ?? {};
+		let settings: AgentDashboardSettings = {
+			agent: { ...DEFAULT_SETTINGS.agent, ...(s.agent ?? {}) },
+			projectTracker: { ...DEFAULT_SETTINGS.projectTracker, ...(s.projectTracker ?? {}) },
 			featureFlags: {
 				...DEFAULT_SETTINGS.featureFlags,
-				...(stored?.featureFlags ?? {}),
-				organize: { ...DEFAULT_SETTINGS.featureFlags.organize, ...(stored?.featureFlags?.organize ?? {}) },
+				...(s.featureFlags ?? {}),
+				organize: { ...DEFAULT_SETTINGS.featureFlags.organize, ...(s.featureFlags?.organize ?? {}) },
+				memory: { ...DEFAULT_SETTINGS.featureFlags.memory, ...(s.featureFlags?.memory ?? {}) },
 			},
 		};
+		const fromFile = this.secretFile ? await this.secretFile.read() : null;
+		const migrated = migrateSecrets(settings, fromFile);
+		if (migrated.migrated) {
+			settings = migrated.settings;
+			this.secrets = migrated.secrets;
+			await this.saveData(settings);
+			if (this.secretFile) await this.secretFile.write(this.secrets);
+		} else {
+			this.secrets = fromFile ?? EMPTY_SECRETS;
+		}
+		this.settings = applySecrets(settings, this.secrets);
 	}
 
 	async saveSettings(): Promise<void> {
-		await this.saveData(this.settings);
+		this.secrets = {
+			agentApiKey: this.settings.agent.apiKey,
+			githubToken: this.settings.projectTracker.githubToken,
+		};
+		await this.saveData(stripSecrets(this.settings));
+		if (this.secretFile) await this.secretFile.write(this.secrets);
 		this.projectTracker?.setRepos(this.settings.projectTracker.repos);
 	}
 

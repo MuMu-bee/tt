@@ -53,6 +53,15 @@ export class ProjectTracker {
 		this.repos = [...repos];
 	}
 
+	async readSummary(repo: string): Promise<string | null> {
+		const entry = await this.cache.read<{ text: string }>('summary-' + repo);
+		return entry?.data.text ?? null;
+	}
+
+	async writeSummary(repo: string, summary: string): Promise<void> {
+		await this.cache.write('summary-' + repo, { text: summary });
+	}
+
 	async refresh(repo: string, force = false): Promise<RepoSnapshot> {
 		const cacheKey = 'project-' + repo;
 		const cached = await this.cache.read<RepoSnapshot>(cacheKey);

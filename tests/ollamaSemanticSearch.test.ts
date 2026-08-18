@@ -136,6 +136,21 @@ test('zero-similarity notes are filtered out', async () => {
 	assert.ok(results.every((result) => result.path !== 'b.md'));
 });
 
+test('changed content is re-embedded via raw hash detection', async () => {
+	const embedding = new FakeEmbedding();
+	const { search, reader } = makeSearch({ 'a.md': '读书', 'b.md': '心得' }, embedding);
+
+	await search.search({ text: '读书', limit: 5 }, ctx());
+	const callsBefore = embedding.embedCalls;
+
+	reader.notes.set('a.md', '读书 心得');
+	const results = await search.search({ text: '读书', limit: 5 }, ctx());
+
+	// One re-embed batch for the changed note + one query embed.
+	assert.equal(embedding.embedCalls, callsBefore + 2);
+	assert.ok(results.some((result) => result.path === 'a.md'));
+});
+
 test('embedding failure rejects and lets the facade degrade', async () => {
 	const embedding = new FakeEmbedding();
 	embedding.fail = true;

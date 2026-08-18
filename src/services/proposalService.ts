@@ -20,6 +20,6 @@ export class ProposalService {
   async get(proposalId: string, context: RequestContext): Promise<Proposal | null> { return this.store.get(proposalId, context); }
   async list(filter: ProposalFilter, context: RequestContext): Promise<Proposal[]> { return this.store.list(filter, context); }
   private fromChange(plan: OrganizePlan, change: PlannedChange): Proposal {
-    return { proposal_id: createRequestId(), request_id: plan.request_id, target_path: change.path, target_zone: change.zone, change_kind: change.kind, base_hash: change.before_hash, before: change.before, after: change.after, diff: change.diff, reason: change.reason, created_at: new Date().toISOString(), status: 'pending', requires_approval: true, schema_version: 1 };
+    return { proposal_id: createRequestId(), request_id: plan.request_id, target_path: change.path, target_zone: change.zone, change_kind: change.kind, base_hash: change.before_hash, before: change.before, after: change.after, diff: change.diff, reason: change.reason, created_at: new Date().toISOString(), status: 'pending', requires_approval: true, schema_version: 1, scope_snapshot: plan.scope_snapshot };
   }
 }

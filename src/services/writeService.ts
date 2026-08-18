@@ -1,13 +1,14 @@
 import { sha256Hex } from '../utils/sha256.ts';
 import type { RequestContext } from '../application/requestContext.ts';
 import { DEFAULT_FEATURE_FLAGS, type FeatureFlags } from '../application/featureFlags.ts';
-import type { ChangeKind, RefreshStatus, WriteRequest, WriteResult } from '../application/contracts.ts';
+import type { ChangeKind, RefreshStatus, SearchScope, WriteRequest, WriteResult } from '../application/contracts.ts';
 import type { WritePort } from '../ports/writePort.ts';
 import type { AuditSink } from '../ports/auditSink.ts';
 import type { IndexLifecycleService } from './indexLifecycleService.ts';
 import type { PersistenceGate } from './persistenceGate.ts';
 import { parseVaultDocument } from '../domain/vault-document.ts';
 import { inferZone } from '../domain/zones.ts';
+import { allowsPath } from '../application/scopeUtils.ts';
 
 export class WriteService {
   private readonly persistenceGate?: PersistenceGate;
@@ -36,9 +37,14 @@ export class WriteService {
     const beforeHash = hash(current);
     if (beforeHash !== request.before_hash) return this.result(request, 'conflict', 'HASH_CONFLICT', beforeHash);
 
+    const parsed = parseVaultDocument(request.path, current);
+
+    /* Scope authorization: callers must provide a snapshot that covers the target. */
+    if (!this.scopeAllows(request.path, parsed.tags, request.scope_snapshot)) return this.result(request, 'failed', 'SCOPE_DENIED', beforeHash);
+
     /* Re-infer the zone from the actual file content so callers cannot bypass
        proposal-only zones by self-reporting a different zone. */
-    const actualZone = inferZone(request.path, parseVaultDocument(request.path, current).frontmatter);
+    const actualZone = inferZone(request.path, parsed.frontmatter);
     if (actualZone === 'fiction' || actualZone === 'unknown') return this.result(request, 'proposal_only', 'FICTION_PROPOSAL_ONLY');
 
     let result: WriteResult;
@@ -68,6 +74,7 @@ export class WriteService {
   }
   private async appendAudit(request: WriteRequest, result: WriteResult, context: RequestContext): Promise<void> { await this.audit.append({ request_id: context.request_id, actor: context.actor, action: request.kind, path: request.path, before_hash: result.before_hash, after_hash: result.after_hash, result: result.status, created_at: new Date().toISOString(), error_code: result.error_code }, context.child ? context.child() : context); }
   private result(request: WriteRequest, status: WriteResult['status'], errorCode?: WriteResult['error_code'], beforeHash = request.before_hash): WriteResult { return { path: request.path, status, before_hash: beforeHash, ...(errorCode ? { error_code: errorCode } : {}) }; }
+  private scopeAllows(path: string, tags: string[], scope: SearchScope): boolean { if (!scope) return true; const pathOk = allowsPath(path, scope); if (scope.kind === 'tag') return pathOk && tags.includes(scope.value ?? ''); return pathOk; }
   private allowed(kind: ChangeKind): boolean { return ['frontmatter-add', 'tag-add', 'bidirectional-link-add', 'format-normalize'].includes(kind); }
   private message(error: unknown): string { return error instanceof Error ? error.message : '索引刷新失败'; }
 }

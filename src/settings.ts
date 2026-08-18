@@ -67,7 +67,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('云端 API Key')
-			.setDesc(`云端 LLM 的 API 密钥。注意：密钥以明文保存在插件数据文件（${this.app.vault.configDir}/plugins/agent-dashboard/data.json）中，请勿在共享设备上使用。`)
+			.setDesc(`云端 LLM 的 API 密钥。密钥保存在插件目录的 secrets.json（权限 0600），不再写入 data.json。`)
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text
@@ -176,7 +176,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('GitHub Token')
-			.setDesc('可选的 GitHub 个人访问令牌（只读即可），用于提高获取频率限制。不填也能用。')
+			.setDesc('可选的 GitHub 个人访问令牌（只读即可），用于提高获取频率限制。保存在 secrets.json（权限 0600）。')
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text
@@ -263,6 +263,72 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.setValue(this.plugin.settings.featureFlags.semantic_search)
 					.onChange(async (value) => {
 						this.plugin.settings.featureFlags.semantic_search = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		// ===== 记忆系统 =====
+		new Setting(containerEl)
+			.setName('记忆系统')
+			.setHeading();
+
+		new Setting(containerEl)
+			.setName('启用记忆系统')
+			.setDesc('总开关。开启后对话记忆（_memory/）才会写入和召回；默认关闭以保证旧行为不变。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.memory.enabled)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.memory.enabled = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('捕获对话（L0）')
+			.setDesc('把每轮对话原样追加到 _memory/conversations/。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.memory.captureL0)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.memory.captureL0 = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('自动提炼（L1/L2/L3）')
+			.setDesc('从对话中自动提炼原子记忆、场景与人格画像（Phase 3 将完整启用）。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.memory.autoExtract)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.memory.autoExtract = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('对话自动召回')
+			.setDesc('发送消息前自动按 L3→L2→L1→L0 注入记忆上下文。')
+			.addToggle((toggle) =>
+				toggle
+					.setValue(this.plugin.settings.featureFlags.memory.autoRecall)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.memory.autoRecall = value;
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('召回深度')
+			.setDesc('每轮预注入的记忆深度上限。')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ l1: 'L1 原子', l2: 'L2 场景', l3: 'L3 人格' })
+					.setValue(this.plugin.settings.featureFlags.memory.recallDepth)
+					.onChange(async (value) => {
+						this.plugin.settings.featureFlags.memory.recallDepth = value as 'l1' | 'l2' | 'l3';
 						await this.plugin.saveSettings();
 					}),
 			);

@@ -1,6 +1,7 @@
 import { App, TFile } from 'obsidian';
 import type { RequestContext } from '../application/requestContext';
 import type { VaultReaderPort } from '../ports/vaultReaderPort';
+import { MEMORY_ROOT } from '../application/memoryTypes';
 
 /** Adapts Obsidian's Vault API to the read-only workbench port. */
 export class ObsidianVaultReader implements VaultReaderPort {
@@ -15,6 +16,9 @@ export class ObsidianVaultReader implements VaultReaderPort {
 	}
 
 	async listMarkdownPaths(_context: RequestContext): Promise<string[]> {
-		return this.app.vault.getMarkdownFiles().map((file) => file.path);
+		const memoryPrefix = `${MEMORY_ROOT}/`;
+		return this.app.vault.getMarkdownFiles()
+			.map((file) => file.path)
+			.filter((path) => !path.startsWith(memoryPrefix));
 	}
 }

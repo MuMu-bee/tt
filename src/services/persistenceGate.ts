@@ -23,5 +23,9 @@ export class PersistenceGate {
   }
 
   isWritable(): boolean { return this.current.write_enabled && this.current.restored && !this.current.degraded; }
+
+  /** Persistence layer is restored and healthy, independent of the proposal write flag. Generated-content writes use this gate. */
+  isPersistenceReady(): boolean { return this.current.restored && !this.current.degraded; }
+
   status(): PersistenceRuntimeStatus { return this.current; }
 }

@@ -5,31 +5,35 @@ import {
 	type RequestContext,
 } from '../application/requestContext';
 import { toDateKey } from './dashboardMath';
-import { CacheStore } from './cacheStore';
 import { DashboardService } from './dashboardService';
 import { WORKBENCH_DIRS } from '../data/dashboardTypes';
+import type { WorkbenchWriteService } from './workbenchWriteService';
 
 export class AgentActionService {
-	private readonly writer: CacheStore;
-
 	constructor(
 		private readonly app: App,
 		private readonly dashboard: DashboardService,
 		private readonly model: ModelPort,
-	) {
-		this.writer = new CacheStore(app.vault);
-	}
+		private readonly workbenchWrite: WorkbenchWriteService,
+	) {}
 
-	async createDiary(_context: RequestContext = createRequestContext()): Promise<string> {
+	async createDiary(context: RequestContext = createRequestContext()): Promise<string> {
 		const date = toDateKey(new Date());
-		await this.writer.ensureFolder(WORKBENCH_DIRS.daily);
 		const path = normalizePath(`${WORKBENCH_DIRS.daily}/${date}.md`);
 		const existing = this.app.vault.getAbstractFileByPath(path);
 		if (existing instanceof TFile) {
 			return path;
 		}
-		await this.writer.writeText(path, `# ${date}\n\n## Tasks\n\n- [ ] \n`);
-		return path;
+		const result = await this.workbenchWrite.writeGenerated({
+			path,
+			content: `# ${date}\n\n## Tasks\n\n- [ ] \n`,
+			kind: 'diary',
+			context,
+		});
+		if (result.status === 'failed') {
+			throw new Error(result.error_code ?? '日记写入失败');
+		}
+		return result.path;
 	}
 
 	async runDeepResearch(context: RequestContext = createRequestContext()): Promise<string> {
@@ -43,14 +47,13 @@ export class AgentActionService {
 
 	async ingestInbox(
 		content: string,
-		_context: RequestContext = createRequestContext(),
+		context: RequestContext = createRequestContext(),
 	): Promise<string> {
 		const trimmed = content.trim();
 		if (!trimmed) {
 			throw new Error('请输入要导入 Inbox 的内容。');
 		}
 
-		await this.writer.ensureFolder(WORKBENCH_DIRS.inbox);
 		const now = new Date();
 		const timestamp = [
 			String(now.getFullYear()),
@@ -63,8 +66,16 @@ export class AgentActionService {
 		].join('');
 		const title = this.sanitizeTitle(trimmed.split(/\r?\n/)[0] ?? 'inbox-note');
 		const path = normalizePath(`${WORKBENCH_DIRS.inbox}/${timestamp}-${title || 'inbox-note'}.md`);
-		await this.writer.writeText(path, `---\ncreated: ${now.toISOString()}\ntags:\n  - inbox\n---\n\n${trimmed}\n`);
-		return path;
+		const result = await this.workbenchWrite.writeGenerated({
+			path,
+			content: `---\ncreated: ${now.toISOString()}\ntags:\n  - inbox\n---\n\n${trimmed}\n`,
+			kind: 'inbox',
+			context,
+		});
+		if (result.status === 'failed') {
+			throw new Error(result.error_code ?? 'Inbox 写入失败');
+		}
+		return result.path;
 	}
 
 	async runVaultLint(_context: RequestContext = createRequestContext()): Promise<string> {
@@ -91,10 +102,18 @@ export class AgentActionService {
 	}
 
 	private async writeReport(fileName: string, content: string): Promise<string> {
-		await this.writer.ensureFolder(WORKBENCH_DIRS.reports);
 		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
-		await this.writer.writeText(path, content.endsWith('\n') ? content : `${content}\n`);
-		return path;
+		const context = createRequestContext();
+		const result = await this.workbenchWrite.writeGenerated({
+			path,
+			content: content.endsWith('\n') ? content : `${content}\n`,
+			kind: 'report',
+			context,
+		});
+		if (result.status === 'failed') {
+			throw new Error(result.error_code ?? '报告写入失败');
+		}
+		return result.path;
 	}
 
 	private sanitizeTitle(value: string): string {

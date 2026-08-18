@@ -43,6 +43,8 @@ export interface Proposal {
   status: ProposalStatus;
   requires_approval: boolean;
   schema_version: number;
+  /** Original organize scope snapshot; absent in legacy records (treated as file scope on apply). */
+  scope_snapshot?: SearchScope;
 }
 export interface ProposalFilter { status?: ProposalStatus; target_path?: string; request_id?: string }
 export interface ApprovalRecord { approval_id: string; proposal_id: string; request_id: string; decision: 'approve' | 'reject'; actor: 'user'; decided_at: string; note?: string }

@@ -1,7 +1,8 @@
 import type { App } from 'obsidian';
-import type { RequestContext } from '../application/requestContext';
+import { createRequestContext, type RequestContext } from '../application/requestContext';
 import type { OpenAiModel } from '../adapters/openAiModel';
 import { WORKBENCH_DIRS } from '../data/dashboardTypes';
+import type { WorkbenchWriteService } from './workbenchWriteService';
 import {
 	byteArrayToBase64,
 	mimeFromPath,
@@ -18,6 +19,7 @@ export class VisionService {
 	constructor(
 		private readonly app: App,
 		private readonly model: OpenAiModel,
+		private readonly workbenchWrite: WorkbenchWriteService,
 	) {}
 
 	async understandImage(
@@ -38,7 +40,7 @@ export class VisionService {
 		return this.model.generateVision(prompt, dataUrl, context);
 	}
 
-	async writeImageReport(path: string, content: string): Promise<string> {
+	async writeImageReport(path: string, content: string, context: RequestContext = createRequestContext('user')): Promise<string> {
 		const now = new Date();
 		const stamp = [
 			now.getFullYear(),
@@ -50,8 +52,16 @@ export class VisionService {
 			String(now.getSeconds()).padStart(2, '0'),
 		].join('');
 		const fileName = '图片理解-' + stamp + '.md';
-		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
-		await this.app.vault.create(`${WORKBENCH_DIRS.reports}/${fileName}`, `# 图片理解\n\n- 来源：${path}\n\n---\n\n${content}\n`);
-		return `${WORKBENCH_DIRS.reports}/${fileName}`;
+		const reportPath = `${WORKBENCH_DIRS.reports}/${fileName}`;
+		const result = await this.workbenchWrite.writeGenerated({
+			path: reportPath,
+			content: `# 图片理解\n\n- 来源：${path}\n\n---\n\n${content}\n`,
+			kind: 'vision',
+			context,
+		});
+		if (result.status === 'failed') {
+			throw new Error(result.error_code ?? '图片报告写入失败');
+		}
+		return result.path;
 	}
 }

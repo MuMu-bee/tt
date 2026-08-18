@@ -47,7 +47,7 @@ export class ProposalApplyService {
     }
     const current = await this.port.read(proposal.target_path, context.child ? context.child() : context);
     if (sha256Hex(current) !== proposal.base_hash) { await this.proposals.updateStatus(proposalId, 'conflict', context); return { path: proposal.target_path, status: 'conflict', before_hash: sha256Hex(current), error_code: 'HASH_CONFLICT', proposal_status: 'conflict' }; }
-    const result = await this.writes.write({ path: proposal.target_path, content: proposal.after, before_hash: proposal.base_hash, kind: proposal.change_kind, scope_snapshot: { kind: 'file', value: proposal.target_path }, zone: proposal.target_zone, request_id: proposal.request_id }, context);
+    const result = await this.writes.write({ path: proposal.target_path, content: proposal.after, before_hash: proposal.base_hash, kind: proposal.change_kind, scope_snapshot: proposal.scope_snapshot ?? { kind: 'file', value: proposal.target_path }, zone: proposal.target_zone, request_id: proposal.request_id }, context);
     const nextStatus: ProposalStatus = result.status === 'applied' ? 'applied' : result.status === 'conflict' ? 'conflict' : result.status === 'proposal_only' ? 'failed' : 'failed';
     await this.proposals.updateStatus(proposalId, nextStatus, context);
     /* Save rollback snapshot after successful apply */

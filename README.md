@@ -76,6 +76,13 @@ OrganizePlan
 | `organize.links` | `false` |
 | `organize.format` | `false` |
 | `fiction_proposal_only` | `true` |
+| `memory.enabled` | `false` |
+| `memory.captureL0` | `false` |
+| `memory.autoExtract` | `false` |
+| `memory.autoRecall` | `false` |
+| `memory.recallDepth` | `l3` |
+
+> 记忆系统的 4 层架构、存储布局与调度语义见 [`docs/memory-architecture.md`](docs/memory-architecture.md)。
 
 ### 持久化文件路径
 

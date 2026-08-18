@@ -26,12 +26,13 @@ import { ProposalService } from './proposalService.ts';
 import { ApprovalService } from './approvalService.ts';
 import { ProposalApplyService } from './proposalApplyService.ts';
 import { RollbackService } from './rollbackService.ts';
+import { WorkbenchWriteService } from './workbenchWriteService.ts';
 import { createRequestContext, type RequestContext } from '../application/requestContext.ts';
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts.ts';
 import { PersistenceGate } from './persistenceGate.ts';
 
 export interface RuntimeAuditQuery { listRecent(limit: number, context: RequestContext): Promise<AuditRecord[]>; }
-export interface RuntimeServices { reader: ObsidianVaultReader; index: InMemoryVaultIndex; lifecycle: IndexLifecycleService; search: SearchService; write: WriteService; organize: OrganizeService; proposals: ProposalService; approvals: ApprovalService; apply: ProposalApplyService; persistence: PersistenceRuntimeStatus; restore(context: RequestContext): Promise<PersistenceRuntimeStatus>; audit: RuntimeAuditQuery; }
+export interface RuntimeServices { reader: ObsidianVaultReader; index: InMemoryVaultIndex; lifecycle: IndexLifecycleService; search: SearchService; write: WriteService; workbenchWrite: WorkbenchWriteService; organize: OrganizeService; proposals: ProposalService; approvals: ApprovalService; apply: ProposalApplyService; persistence: PersistenceRuntimeStatus; restore(context: RequestContext): Promise<PersistenceRuntimeStatus>; audit: RuntimeAuditQuery; auditSink: import('../ports/auditSink.ts').AuditSink; }
 export async function composeRuntime(app: App, settings: AgentDashboardSettings): Promise<RuntimeServices> {
   const reader = new ObsidianVaultReader(app); const index = new InMemoryVaultIndex(reader); const lifecycle = new IndexLifecycleService(reader, index); const flags = settings.featureFlags;
   const semantic = flags.semantic_search ? new OllamaSemanticSearch(reader, new OllamaEmbedding(settings.agent)) : new UnavailableSemanticSearch();
@@ -54,8 +55,17 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
       }
     },
     query: async (filter: import('../application/contracts.ts').AuditFilter, ctx: RequestContext) => baseSink.query(filter, ctx),
+    retry: async (recordId: string, ctx: RequestContext) => {
+      const status = await auditStore.retry(recordId, ctx);
+      if (status === 'success') {
+        const record = (await auditStore.query({}, ctx)).find((item) => item.audit_id === recordId);
+        if (record) await auditDual.writeSecondary(JSON.stringify(record), ctx);
+      }
+      return status;
+    },
   };
   const write = new WriteService(writePort, auditSink, lifecycle, flags, persistenceGate);
+  const workbenchWrite = new WorkbenchWriteService(writePort, auditSink, persistenceGate);
   const scopeService = new ScopeService();
   const scanner: OrganizePort = { scan: async (scope: SearchScope, context) => {
     const notes: NoteRecord[] = [];
@@ -71,12 +81,15 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
   const organize = new OrganizeService(scanner, flags);
   const proposals = new ProposalService(proposalStore);
   const approvals = new ApprovalService(proposalStore, approvalStore);
-  const rollback = new RollbackService(app);
+  const rollback = new RollbackService(app, auditSink);
   const apply = new ProposalApplyService(proposalStore, approvalStore, write, writePort, persistenceGate, async (path, before, after, ctx) => { await rollback.snapshot(path, before, after, ctx); }, auditSink);
   let persistence: PersistenceRuntimeStatus = { restored: false, write_enabled: false, degraded: true, stores: { proposals: { available: false, loaded: false, skipped_rows: 0 }, approvals: { available: false, loaded: false, skipped_rows: 0 }, audit: { available: false, loaded: false, skipped_rows: 0 } } };
   const restore = async (context: RequestContext): Promise<PersistenceRuntimeStatus> => {
     persistence = await persistenceGate.restore({ proposals: proposalStore, approvals: approvalStore, audit: auditStore }, context);
     write.setPersistenceReady(persistence.restored && !persistence.degraded);
+    if (persistence.restored) {
+      try { await approvals.reconcile(context.child ? context.child() : context); } catch (error) { console.error('[agent-dashboard] 审批对账失败（非致命）。', error); }
+    }
     return persistence;
   };
   persistence = await restore(createRequestContext('background-task'));
@@ -88,7 +101,7 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
         .slice(0, Math.max(0, limit));
     },
   };
-  return { reader, index, lifecycle, search, write, organize, proposals, approvals, apply, persistence, restore, audit };
+  return { reader, index, lifecycle, search, write, workbenchWrite, organize, proposals, approvals, apply, persistence, restore, audit, auditSink };
 }
 
 function extractLinks(raw: string): string[] {

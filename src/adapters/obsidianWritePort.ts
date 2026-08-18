@@ -1,4 +1,4 @@
-import { App, TFile } from 'obsidian';
+import { App, normalizePath, TFile } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import type { WritePort } from '../ports/writePort.ts';
 
@@ -23,6 +23,19 @@ export class ObsidianWritePort implements WritePort {
     const file = this.app.vault.getAbstractFileByPath(path);
     if (!(file instanceof TFile)) throw new Error(`找不到 Markdown 文件：${path}`);
     await this.app.vault.modify(file, content);
+  }
+
+  async create(path: string, content: string, _context: RequestContext): Promise<void> {
+    this.assertMarkdownPath(path);
+    const normalized = normalizePath(path);
+    const parent = normalized.split('/').slice(0, -1).join('/');
+    if (parent) {
+      const parentFile = this.app.vault.getAbstractFileByPath(parent);
+      if (!parentFile) await this.app.vault.adapter.mkdir(parent);
+    }
+    const existing = this.app.vault.getAbstractFileByPath(normalized);
+    if (existing instanceof TFile) throw new Error(`文件已存在：${normalized}`);
+    await this.app.vault.create(normalized, content);
   }
 
   private assertMarkdownPath(path: string): void {

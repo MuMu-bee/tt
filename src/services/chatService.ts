@@ -1,6 +1,10 @@
 import { requestUrl } from 'obsidian';
 import type { AgentConfig, ChatMessage, ChatReference } from '../data/dashboardTypes';
 import { VaultContextService } from './vaultContext';
+import { createRequestContext, type RequestContext } from '../application/requestContext';
+import type { MemoryFeatureFlags } from '../application/featureFlags';
+import type { MemoryRecallBundle } from '../application/memoryTypes';
+import type { MemoryCapturePort, MemoryRecallPort } from '../ports/memoryPort';
 
 /**
  * 对话服务（含 Vault 上下文注入的流式 LLM 对话）。
@@ -36,10 +40,15 @@ export class ChatService {
 	private messages: ChatMessage[] = [];
 	private listeners: ChatListener[] = [];
 	private abortController: AbortController | null = null;
+	private readonly sessionKey = 'chat';
+	private readonly sessionId = `chat_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
 	constructor(
 		private readonly config: AgentConfig,
 		private readonly vaultContext: VaultContextService,
+		private readonly memoryRecall?: MemoryRecallPort,
+		private readonly memoryCapture?: MemoryCapturePort,
+		private readonly memoryFlags?: MemoryFeatureFlags,
 	) {}
 
 	/** Update config at runtime (e.g. when user changes settings). */
@@ -84,6 +93,17 @@ export class ChatService {
 		};
 		this.messages.push(userMessage);
 
+		// Capture L0 user turn when the memory pipeline is enabled (autoExtract also needs the turn feed).
+		if (this.memoryFlags?.enabled && (this.memoryFlags.captureL0 || this.memoryFlags.autoExtract)) {
+			void this.memoryCapture?.capture(
+				this.sessionKey,
+				this.sessionId,
+				'user',
+				content,
+				createRequestContext('user'),
+			).catch(() => undefined);
+		}
+
 		// Search vault for relevant context
 		let references: ChatReference[] = [];
 		let vaultContext = '';
@@ -100,8 +120,19 @@ export class ChatService {
 			// Context search failure shouldn't block the chat
 		}
 
+		// Recall layered memory (progressive disclosure) when autoRecall is enabled.
+		let memoryBlock = '';
+		if (this.memoryFlags?.enabled && this.memoryFlags.autoRecall && this.memoryRecall) {
+			try {
+				const bundle = await this.memoryRecall.recall(content, createRequestContext('user'));
+				memoryBlock = this.formatMemoryRecall(bundle);
+			} catch {
+				// Memory recall failure should not block the chat.
+			}
+		}
+
 		// Build messages for API
-		const apiMessages = this.buildApiMessages(vaultContext);
+		const apiMessages = this.buildApiMessages(vaultContext, memoryBlock);
 
 		// Create assistant message placeholder
 		const assistantMessage: ChatMessage = {
@@ -125,6 +156,17 @@ export class ChatService {
 
 		assistantMessage.streaming = false;
 		this.emit({ type: 'complete', content: assistantMessage.content });
+
+		// Capture L0 assistant turn when the memory pipeline is enabled.
+		if (this.memoryFlags?.enabled && (this.memoryFlags.captureL0 || this.memoryFlags.autoExtract) && assistantMessage.content.trim()) {
+			void this.memoryCapture?.capture(
+				this.sessionKey,
+				this.sessionId,
+				'assistant',
+				assistantMessage.content,
+				createRequestContext('user'),
+			).catch(() => undefined);
+		}
 	}
 
 	/**
@@ -210,25 +252,39 @@ export class ChatService {
 			buffer = lines.pop() ?? '';
 
 			for (const line of lines) {
-				const trimmed = line.trim();
-				if (!trimmed || !trimmed.startsWith('data: ')) continue;
-				const data = trimmed.slice(6);
-				if (data === '[DONE]') return;
-
-				try {
-					const parsed = JSON.parse(data) as {
-						choices?: Array<{ delta?: { content?: string } }>;
-					};
-					const delta = parsed.choices?.[0]?.delta?.content;
-					if (delta) {
-						assistantMessage.content += delta;
-						this.emit({ type: 'delta', content: delta });
-					}
-				} catch {
-					// Skip malformed chunks
-				}
+				if (this.handleCloudLine(line, assistantMessage)) return;
 			}
 		}
+
+		// Flush the final partial line held in the decoder's buffer.
+		buffer += decoder.decode();
+		if (buffer.trim()) {
+			for (const line of buffer.split('\n')) {
+				if (this.handleCloudLine(line, assistantMessage)) return;
+			}
+		}
+	}
+
+	/** Parses one SSE line. Returns true when the stream sent [DONE]. */
+	private handleCloudLine(line: string, assistantMessage: ChatMessage): boolean {
+		const trimmed = line.trim();
+		if (!trimmed || !trimmed.startsWith('data: ')) return false;
+		const data = trimmed.slice(6);
+		if (data === '[DONE]') return true;
+
+		try {
+			const parsed = JSON.parse(data) as {
+				choices?: Array<{ delta?: { content?: string } }>;
+			};
+			const delta = parsed.choices?.[0]?.delta?.content;
+			if (delta) {
+				assistantMessage.content += delta;
+				this.emit({ type: 'delta', content: delta });
+			}
+		} catch {
+			// Skip malformed chunks
+		}
+		return false;
 	}
 
 	private async nonStreamCloudAPI(
@@ -303,20 +359,33 @@ export class ChatService {
 			buffer = lines.pop() ?? '';
 
 			for (const line of lines) {
-				if (!line.trim()) continue;
-				try {
-					const parsed = JSON.parse(line) as {
-						message?: { content?: string };
-					};
-					const delta = parsed.message?.content;
-					if (delta) {
-						assistantMessage.content += delta;
-						this.emit({ type: 'delta', content: delta });
-					}
-				} catch {
-					// Skip malformed lines
-				}
+				this.handleOllamaLine(line, assistantMessage);
 			}
+		}
+
+		// Flush the final partial line held in the decoder's buffer.
+		buffer += decoder.decode();
+		if (buffer.trim()) {
+			for (const line of buffer.split('\n')) {
+				this.handleOllamaLine(line, assistantMessage);
+			}
+		}
+	}
+
+	/** Parses one Ollama NDJSON stream line. */
+	private handleOllamaLine(line: string, assistantMessage: ChatMessage): void {
+		if (!line.trim()) return;
+		try {
+			const parsed = JSON.parse(line) as {
+				message?: { content?: string };
+			};
+			const delta = parsed.message?.content;
+			if (delta) {
+				assistantMessage.content += delta;
+				this.emit({ type: 'delta', content: delta });
+			}
+		} catch {
+			// Skip malformed lines
 		}
 	}
 
@@ -325,6 +394,7 @@ export class ChatService {
 	 */
 	private buildApiMessages(
 		vaultContext: string,
+		memoryBlock = '',
 	): Array<{ role: string; content: string }> {
 		const messages: Array<{ role: string; content: string }> = [];
 
@@ -332,6 +402,9 @@ export class ChatService {
 		let systemContent = SYSTEM_PROMPT;
 		if (vaultContext) {
 			systemContent += '\n\n' + vaultContext;
+		}
+		if (memoryBlock) {
+			systemContent += '\n\n' + memoryBlock;
 		}
 		messages.push({ role: 'system', content: systemContent });
 
@@ -343,6 +416,24 @@ export class ChatService {
 		}
 
 		return messages;
+	}
+
+	/** Formats the recall bundle into a compact system-prompt block (L3 → L2 → L1 → L0). */
+	private formatMemoryRecall(bundle: MemoryRecallBundle): string {
+		const parts: string[] = [];
+		if (bundle.l3) {
+			parts.push('## 长期画像\n' + bundle.l3);
+		}
+		if (bundle.l2.length > 0) {
+			parts.push('## 相关场景\n' + bundle.l2.map((scene) => `- ${scene.summary}（热度 ${scene.heat}）`).join('\n'));
+		}
+		if (bundle.l1.length > 0) {
+			parts.push('## 相关记忆\n' + bundle.l1.map((atom) => `- ${atom.content}`).join('\n'));
+		}
+		if (bundle.l0.length > 0) {
+			parts.push('## 原文回溯\n' + bundle.l0.map((turn) => `- [${turn.role}] ${turn.content}`).join('\n'));
+		}
+		return parts.length > 0 ? '## 记忆\n' + parts.join('\n\n') : '';
 	}
 
 	private emit(event: ChatEvent): void {

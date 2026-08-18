@@ -1,6 +1,7 @@
 import { App, normalizePath, TFile } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
+import type { AuditSink } from '../ports/auditSink.ts';
 import { sha256Hex } from '../utils/sha256.ts';
 
 export interface RollbackEntry {
@@ -18,7 +19,7 @@ const SNAPSHOTS_DIR = '_workbench/snapshots/';
 export class RollbackService {
 	private readonly app: App;
 
-	constructor(app: App) {
+	constructor(app: App, private readonly audit?: AuditSink) {
 		this.app = app;
 	}
 
@@ -63,6 +64,16 @@ export class RollbackService {
 				}
 
 				await this.app.vault.modify(target, entry.before);
+				await this.audit?.append({
+					request_id: context.request_id,
+					actor: context.actor,
+					action: 'rollback',
+					path,
+					before_hash: entry.after_hash,
+					after_hash: entry.before_hash,
+					result: 'applied',
+					created_at: new Date().toISOString(),
+				}, context);
 				return { rolledBack: true, message: `已回滚 ${path} 到修改前状态` };
 			}
 			return { rolledBack: false, message: `未找到 ${path} 的回滚快照` };

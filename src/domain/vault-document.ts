@@ -134,14 +134,20 @@ function splitKeyValue(text: string): { key: string; value: string } | null {
 function parseScalar(value: string): unknown {
 	const unquoted = value.replace(/^(['"])([\s\S]*)\1$/u, '$2');
 	if (unquoted !== value) return unquoted;
-	if (value === 'null' || value === '~') return null;
-	if (value === 'true' || value === 'True' || value === 'TRUE') return true;
-	if (value === 'false' || value === 'False' || value === 'FALSE') return false;
-	if (/^-?(?:\d+\.?\d*|\.\d+)$/u.test(value)) return Number(value);
-	if (value.startsWith('[') && value.endsWith(']')) {
-		return splitInline(value.slice(1, -1)).map((item) => parseScalar(item.trim())).filter((item) => item !== '');
+	const scalar = stripInlineComment(value);
+	if (scalar === 'null' || scalar === '~') return null;
+	if (scalar === 'true' || scalar === 'True' || scalar === 'TRUE') return true;
+	if (scalar === 'false' || scalar === 'False' || scalar === 'FALSE') return false;
+	if (/^-?(?:\d+\.?\d*|\.\d+)$/u.test(scalar)) return Number(scalar);
+	if (scalar.startsWith('[') && scalar.endsWith(']')) {
+		return splitInline(scalar.slice(1, -1)).map((item) => parseScalar(item.trim())).filter((item) => item !== '');
 	}
-	return value;
+	return scalar;
+}
+
+/** Removes a trailing YAML inline comment, e.g. "fiction # comment" -> "fiction". */
+function stripInlineComment(value: string): string {
+	return value.replace(/(\s)#[^\n]*$/u, '$1').trimEnd();
 }
 
 function splitInline(value: string): string[] {

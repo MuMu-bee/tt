@@ -1,6 +1,6 @@
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestId } from '../application/requestContext.ts';
-import type { AuditEvent, AuditRecord } from '../application/contracts.ts';
+import type { AuditEvent, AuditRecord, AuditWriteStatus } from '../application/contracts.ts';
 import type { AuditSink } from '../ports/auditSink.ts';
 import { JsonlAuditStore } from './jsonlAuditStore.ts';
 
@@ -21,5 +21,9 @@ export class JsonlAuditSink implements AuditSink {
 
   query(filter: Partial<AuditEvent>, context: RequestContext): Promise<AuditEvent[]> {
     return this.store.query(filter, context);
+  }
+
+  retry(recordId: string, context: RequestContext): Promise<AuditWriteStatus> {
+    return this.store.retry(recordId, context);
   }
 }

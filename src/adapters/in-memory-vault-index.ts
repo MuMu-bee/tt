@@ -128,11 +128,12 @@ export class InMemoryVaultIndex implements IndexPort {
 			degreeMap.set(path, 0);
 		});
 
+		const { byPath, byTitle } = this.buildLinkResolvers();
 		this.entries.forEach((entry, path) => {
 			const links = entry.document.links;
 			if (!links) return;
 			links.forEach((link) => {
-				const target = this.resolveLink(link);
+				const target = this.resolveLink(link, byPath, byTitle);
 				if (target && degreeMap.has(path) && degreeMap.has(target)) {
 					const key = path < target ? `${path}::${target}` : `${target}::${path}`;
 					if (!edgeSet.has(key)) {
@@ -154,18 +155,28 @@ export class InMemoryVaultIndex implements IndexPort {
 		return { nodes, edges, stats: { nodeCount: nodes.length, edgeCount: edges.length, isolatedCount } };
 	}
 
-	private resolveLink(link: string): string | null {
+	private buildLinkResolvers(): { byPath: Map<string, string>; byTitle: Map<string, string> } {
+		const byPath = new Map<string, string>();
+		const byTitle = new Map<string, string>();
+		this.entries.forEach((entry, path) => {
+			const normalizedPath = path.replace(/\\/g, '/').toLowerCase();
+			const setPath = (key: string): void => {
+				if (key && !byPath.has(key)) byPath.set(key, path);
+			};
+			setPath(normalizedPath);
+			if (normalizedPath.endsWith('.md')) setPath(normalizedPath.slice(0, -3));
+			const basename = path.replace(/\\/g, '/').split('/').pop() ?? path;
+			const normalizedBase = basename.toLowerCase();
+			setPath(normalizedBase);
+			if (normalizedBase.endsWith('.md')) setPath(normalizedBase.slice(0, -3));
+			const title = entry.document.title.toLowerCase();
+			if (title && !byTitle.has(title)) byTitle.set(title, path);
+		});
+		return { byPath, byTitle };
+	}
+
+	private resolveLink(link: string, byPath: Map<string, string>, byTitle: Map<string, string>): string | null {
 		const normalized = link.replace(/\\/g, '/').toLowerCase();
-		for (const [path] of this.entries) {
-			const p = path.replace(/\\/g, '/').toLowerCase();
-			if (p === normalized || p === `${normalized}.md` || p.endsWith(`/${normalized}.md`) || p.endsWith(`/${normalized}`)) {
-				return path;
-			}
-		}
-		/* Try matching by title */
-		for (const [path, entry] of this.entries) {
-			if (entry.document.title.toLowerCase() === normalized) return path;
-		}
-		return null;
+		return byPath.get(normalized) ?? byTitle.get(normalized) ?? null;
 	}
 }

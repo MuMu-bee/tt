@@ -7,7 +7,7 @@
 	"scripts": {
 		"dev": "node esbuild.config.mjs",
 		"build": "tsc -noEmit -skipLibCheck && node esbuild.config.mjs production",
-		"test": "node --test --experimental-strip-types tests/dashboardMath.test.ts tests/requestContext.test.ts tests/portsContract.test.ts tests/readonlyIndex.test.ts tests/searchService.test.ts tests/indexLifecycle.test.ts tests/v02SearchAndOrganize.test.ts tests/v02QaGaps.test.ts tests/v02QaWrite.test.ts tests/proposalAuditQa.test.ts tests/runtimePersistenceIntegration.test.ts tests/proposalViewState.test.ts tests/modelCompletions.test.ts tests/vectorMath.test.ts tests/ollamaSemanticSearch.test.ts tests/githubTracker.test.ts tests/visionCompletions.test.ts",
+		"test": "node --test --experimental-strip-types tests/dashboardMath.test.ts tests/requestContext.test.ts tests/portsContract.test.ts tests/readonlyIndex.test.ts tests/searchService.test.ts tests/indexLifecycle.test.ts tests/v02SearchAndOrganize.test.ts tests/v02QaGaps.test.ts tests/v02QaWrite.test.ts tests/proposalAuditQa.test.ts tests/runtimePersistenceIntegration.test.ts tests/proposalViewState.test.ts tests/modelCompletions.test.ts tests/vectorMath.test.ts tests/ollamaSemanticSearch.test.ts tests/githubTracker.test.ts tests/visionCompletions.test.ts tests/jsonlSerialization.test.ts tests/workbenchWriteService.test.ts tests/memoryLayer.test.ts tests/memoryExtraction.test.ts tests/secretService.test.ts",
 		"version": "node version-bump.mjs && git add manifest.json versions.json",
 		"lint": "eslint src"
 	},

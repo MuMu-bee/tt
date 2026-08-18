@@ -1,3 +1,5 @@
+> **历史文档说明**：本文是「阶段 0」的原始设计稿。最终实现已落地并略有调整——端口在 `src/ports/`、适配器在 `src/adapters/`、应用契约在 `src/application/`（原计划中的 `src/core/` 目录已拆分）。记忆系统的 4 层架构、存储布局与调度语义见 [`docs/memory-architecture.md`](memory-architecture.md)。
+
 # 阶段 0 系统设计：端口化边界与 Hermes 移除
 
 ## 1. 实现方案

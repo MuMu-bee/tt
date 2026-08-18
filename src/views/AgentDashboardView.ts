@@ -23,12 +23,17 @@ import { ImageUnderstandModal } from '../ui/ImageUnderstandModal';
 import { VisionService } from '../services/visionService';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
 import { SearchService } from '../services/searchService';
+import { renderGraphCanvas } from './graphCanvas';
+import { renderChatPage } from './chatPage';
+import { renderProjectTracker, generateProjectReport, type ProjectPageHost } from './projectPage';
+import { renderWorkbench, type WorkbenchPageHost } from './workbenchPage';
 import type { AuditRecord, Proposal, SearchResult } from '../application/contracts';
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts';
 import { IndexLifecycleService } from '../services/indexLifecycleService';
 import { ResearchService } from '../services/researchService';
 import { MemoryPublishService } from '../services/memoryPublishService';
 import { PatrolService } from '../services/patrolService';
+import type { WorkbenchWriteService } from '../services/workbenchWriteService';
 import { ProposalService } from '../services/proposalService';
 import { ApprovalService } from '../services/approvalService';
 import { ProposalApplyService } from '../services/proposalApplyService';
@@ -124,6 +129,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 		private readonly memoryPublish: MemoryPublishService;
 		private readonly patrolService: PatrolService;
 		private readonly chatService?: ChatService;
+		private readonly workbenchWrite: WorkbenchWriteService;
 
 	private workbenchStatusEl: HTMLElement | null = null;
 	private projectListEl: HTMLElement | null = null;
@@ -136,8 +142,7 @@ private liveLabelEl: HTMLSpanElement | null = null;
 	private workbenchToken = 0;
 	private organizeBusy = false;
 	private chatMessagesEl: HTMLElement | null = null;
-	/** 项目追踪：AI 中文摘要的会话内缓存（按仓库名）。 */
-	private projectSummaryCache = new Map<string, string>();
+	/** 项目追踪：AI 中文摘要现在持久化到 CacheStore（按仓库名）。 */
 	/** 知识星图 canvas 的刷新回调：切换到星图页时重新布局（页面隐藏时初始化会得到 0 尺寸）。 */
 	private graphRefreshCallback: (() => void) | null = null;
 
@@ -159,7 +164,8 @@ constructor(
 			researchService: ResearchService,
 			memoryPublish: MemoryPublishService,
 			patrolService: PatrolService,
-			chatService?: ChatService,
+			chatService: ChatService | undefined,
+			workbenchWrite: WorkbenchWriteService,
 		) {
 			super(leaf);
 			this.dashboard = dashboard;
@@ -179,6 +185,7 @@ constructor(
 			this.memoryPublish = memoryPublish;
 			this.patrolService = patrolService;
 			this.chatService = chatService;
+			this.workbenchWrite = workbenchWrite;
 		}
 
 	getViewType(): string {
@@ -418,351 +425,68 @@ this.renderWelcome(overviewPage, data);
 	private renderKnowledgeEmpty(message: string): void { this.knowledgeResultsEl?.empty(); this.knowledgeResultsEl?.createDiv({ cls: 'agent-dashboard-empty-state', text: message }); }
 
 	private renderWorkbench(parent: HTMLElement): void {
-		const card = parent.createEl('section', {
-			cls: 'agent-dashboard-surface agent-dashboard-workbench-card',
-			attr: { id: 'agent-dashboard-workbench', 'aria-labelledby': 'agent-dashboard-workbench-title' },
-		});
-		const header = card.createDiv({ cls: 'agent-dashboard-surface-header compact' });
-		const heading = header.createDiv();
-		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '墨忆台 · 核心功能' });
-		heading.createEl('h2', { attr: { id: 'agent-dashboard-workbench-title' }, text: '整理工作台' });
-		this.workbenchStatusEl = heading.createEl('p', { text: this.lifecycleStatusText() });
-
-		const generateButton = header.createEl('button', {
-			cls: 'agent-dashboard-subtle-button',
-			attr: { type: 'button', 'aria-label': '生成整理计划' },
-		});
-		generateButton.createSpan({ text: '生成整理计划' });
-		this.registerDomEvent(generateButton, 'click', () => {
-			void this.handleGeneratePlan(generateButton);
-		});
-
-this.persistenceBannerEl = card.createDiv({ cls: 'agent-dashboard-persistence-banner' });
-			this.renderPersistenceBanner();
-
-			/* 整理开关配置引导 */
-			const flags = (this as unknown as { organize: OrganizeService }).organize;
-			const isAnyEnabled = flags && typeof flags === 'object' && 'plan' in flags;
-			if (!isAnyEnabled) {
-				const guideEl = card.createDiv({ cls: 'agent-dashboard-organize-guide' });
-				guideEl.createSpan({ text: '💡 提示：生成整理方案前，请先在' });
-				const settingsLink = guideEl.createEl('button', { cls: 'agent-dashboard-organize-guide-link', attr: { type: 'button' } });
-				settingsLink.createSpan({ text: '设置 → 整理工作台 · 生成开关' });
-				guideEl.createSpan({ text: '中开启至少一个规则（如 frontmatter、标签）。' });
-				this.registerDomEvent(settingsLink, 'click', () => {
-					const app = (this as unknown as { app: { setting: { open: () => void } } }).app;
-					app?.setting?.open?.();
-				});
-			}
-
-		this.workbenchErrorEl = card.createDiv({
-			cls: 'agent-dashboard-workbench-error',
-			attr: { role: 'alert', 'aria-live': 'polite' },
-		});
-		this.workbenchErrorEl.hidden = true;
-
-		const listHeading = card.createDiv({ cls: 'agent-dashboard-workbench-subheading' });
-		listHeading.createEl('h3', { text: '整理方案' });
-		this.proposalListEl = card.createDiv({ cls: 'agent-dashboard-proposal-list' });
-
-		const auditDetails = card.createEl('details', { cls: 'agent-dashboard-audit-details' });
-		auditDetails.createEl('summary', { text: '最近审计记录' });
-		this.auditListEl = auditDetails.createDiv({ cls: 'agent-dashboard-audit-list' });
-
-		void this.refreshWorkbench();
-	}
-
-	private renderPersistenceBanner(): void {
-		const bannerEl = this.persistenceBannerEl;
-		if (!bannerEl) {
-			return;
-		}
-		bannerEl.empty();
-		const state = persistenceBanner(this.persistence);
-		bannerEl.addClass(`is-${state.tone}`);
-		const title = bannerEl.createDiv({ cls: 'agent-dashboard-persistence-title' });
-		title.setText(state.title);
-		if (state.tone === 'danger') {
-			const stores = bannerEl.createDiv({ cls: 'agent-dashboard-persistence-stores' });
-			(['proposals', 'approvals', 'audit'] as const).forEach((key) => {
-				const report = this.persistence.stores[key];
-				const row = stores.createDiv({ cls: 'agent-dashboard-persistence-store' });
-				row.createSpan({ cls: 'agent-dashboard-persistence-store-name', text: key });
-				const parts: string[] = [`跳过 ${report.skipped_rows} 行`];
-				if (report.error) {
-					parts.push(report.error);
-				}
-				row.createSpan({ cls: 'agent-dashboard-persistence-store-detail', text: parts.join(' · ') });
-			});
-		}
-	}
-
-	private async handleGeneratePlan(button: HTMLButtonElement): Promise<void> {
-		if (this.organizeBusy || button.disabled) {
-			return;
-		}
-		this.organizeBusy = true;
-		button.disabled = true;
-		this.setWorkbenchStatus('正在生成整理计划…');
-		this.setWorkbenchError('');
-		try {
-			const context = createRequestContext('user');
-			const plan = await this.organize.plan({ kind: 'global' }, context);
-			const created = await this.proposals.createFromPlan(plan, context);
-			this.setWorkbenchStatus(`已生成 ${created.length} 条整理方案`);
-			if (created.length === 0) {
-				this.setWorkbenchError('没有发现需要整理的笔记：请在设置中开启更多整理开关（如「补充标签」），或新建一篇没有 frontmatter/标签的笔记后再试。');
-			}
-			await this.refreshWorkbench();
-		} catch (error) {
-			this.setWorkbenchStatus('生成整理计划失败');
-			this.setWorkbenchError(this.getErrorMessage(error));
-		} finally {
-			this.organizeBusy = false;
-			button.disabled = false;
-		}
-	}
-
-	private async refreshWorkbench(): Promise<void> {
-		if (this.isClosed) {
-			return;
-		}
-		const token = ++this.workbenchToken;
-		try {
-			const context = createRequestContext('user');
-			const proposals = await this.proposals.list({}, context);
-			const auditRecords = await this.audit.listRecent(20, context);
-			if (this.isClosed || token !== this.workbenchToken) {
-				return;
-			}
-			this.renderPersistenceBanner();
-			this.renderProposalList(proposals);
-			this.renderAuditList(auditRecords);
-		} catch (error) {
-			if (this.isClosed || token !== this.workbenchToken) {
-				return;
-			}
-			this.setWorkbenchError(this.getErrorMessage(error));
-		}
-	}
-
-private renderProposalList(proposals: Proposal[]): void {
-			const list = this.proposalListEl;
-			if (!list) {
-				return;
-			}
-			list.empty();
-
-			const sorted = [...proposals].sort((a, b) =>
-				a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0,
-			);
-			if (sorted.length === 0) {
-				list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无整理方案。先开启整理开关并生成计划。' });
-				return;
-			}
-
-			/* 按状态分组，类似 GitHub PR Inbox */
-			const groups = new Map<string, Proposal[]>();
-			const statusKeys = ['pending', 'approved', 'applied', 'rejected', 'conflict', 'failed'];
-			statusKeys.forEach((s) => groups.set(s, []));
-			sorted.forEach((p) => {
-				const key = groups.has(p.status) ? p.status : 'pending';
-				groups.get(key)!.push(p);
-			});
-
-			const groupLabels: Record<string, { label: string; icon: string; color: string }> = {
-				pending: { label: '待审批', icon: '◉', color: 'var(--interactive-accent)' },
-				approved: { label: '已批准，待执行', icon: '✓', color: 'var(--color-green)' },
-				applied: { label: '已应用', icon: '✔', color: 'var(--color-green)' },
-				rejected: { label: '已拒绝', icon: '✕', color: 'var(--color-red)' },
-				conflict: { label: '冲突', icon: '⚠', color: 'var(--color-orange)' },
-				failed: { label: '失败', icon: '✗', color: 'var(--color-red)' },
-			};
-
-			Array.from(groups.entries()).forEach(([status, items]) => {
-				if (items.length === 0) return;
-				const section = list.createDiv({ cls: 'agent-dashboard-proposal-group' });
-				const header = section.createDiv({ cls: 'agent-dashboard-proposal-group-header' });
-				header.createSpan({ cls: 'agent-dashboard-proposal-group-icon', text: groupLabels[status]?.icon ?? '•', attr: { style: `color:${groupLabels[status]?.color ?? 'var(--text-muted)'};` } });
-				header.createSpan({ cls: 'agent-dashboard-proposal-group-label', text: groupLabels[status]?.label ?? status });
-				header.createSpan({ cls: 'agent-dashboard-proposal-group-count', text: String(items.length) });
-				items.forEach((proposal) => this.renderProposalItem(section, proposal));
-			});
-		}
-
-	private renderProposalItem(parent: HTMLElement, proposal: Proposal): void {
-		const actions = proposalActions(proposal, this.persistence);
-		const item = parent.createEl('article', {
-			cls: 'agent-dashboard-proposal-item',
-			attr: { 'data-status': proposal.status },
-		});
-		const topline = item.createDiv({ cls: 'agent-dashboard-proposal-topline' });
-
-		const toggle = topline.createEl('button', {
-			cls: 'agent-dashboard-proposal-toggle',
-			attr: { type: 'button', 'aria-expanded': 'false', 'aria-label': `展开预览：${proposal.target_path}` },
-		});
-		const copy = toggle.createDiv({ cls: 'agent-dashboard-proposal-copy' });
-		copy.createEl('strong', { cls: 'agent-dashboard-proposal-path', text: proposal.target_path });
-		copy.createSpan({
-			cls: 'agent-dashboard-proposal-meta',
-			text: `${zoneLabel(proposal.target_zone)} · ${changeKindLabel(proposal.change_kind)} · ${proposal.base_hash.slice(0, 8)}`,
-		});
-		toggle.createSpan({ cls: 'agent-dashboard-status-badge', text: proposalStatusLabel(proposal.status) });
-		const chevron = toggle.createSpan({ cls: 'agent-dashboard-proposal-chevron', attr: { 'aria-hidden': 'true' } });
-		setIcon(chevron, 'chevron-down');
-
-		const actionBar = topline.createDiv({ cls: 'agent-dashboard-proposal-actions' });
-		if (proposal.status === 'pending') {
-			this.renderProposalButton(actionBar, proposal, 'approve', actions.canApprove, actions.disabledReason);
-			this.renderProposalButton(actionBar, proposal, 'reject', actions.canReject, actions.disabledReason);
-		} else if (proposal.status === 'approved') {
-			this.renderProposalButton(actionBar, proposal, 'apply', actions.canApply, actions.disabledReason);
-		}
-		if (actions.disabledReason) {
-			actionBar.createSpan({ cls: 'agent-dashboard-proposal-disabled-reason', text: actions.disabledReason });
-		}
-
-		const preview = item.createDiv({ cls: 'agent-dashboard-proposal-preview' });
-		preview.hidden = true;
-		this.renderPreviewBlock(preview, '修改前', proposal.before);
-		this.renderPreviewBlock(preview, '修改后', proposal.after);
-		this.renderPreviewBlock(preview, '差异', proposal.diff);
-
-		this.registerDomEvent(toggle, 'click', () => {
-			const expanded = preview.hidden;
-			preview.hidden = !expanded;
-			toggle.setAttr('aria-expanded', String(expanded));
-			toggle.classList.toggle('is-expanded', expanded);
-		});
-	}
-
-	private renderProposalButton(
-		parent: HTMLElement,
-		proposal: Proposal,
-		kind: 'approve' | 'reject' | 'apply',
-		enabled: boolean,
-		disabledReason: string | undefined,
-	): void {
-		const labels: Record<'approve' | 'reject' | 'apply', string> = {
-			approve: '批准',
-			reject: '拒绝',
-			apply: '执行写入',
+		const workbenchState = {
+			workbenchStatusEl: this.workbenchStatusEl,
+			persistenceBannerEl: this.persistenceBannerEl,
+			workbenchErrorEl: this.workbenchErrorEl,
+			proposalListEl: this.proposalListEl,
+			auditListEl: this.auditListEl,
+			workbenchToken: this.workbenchToken,
+			organizeBusy: this.organizeBusy,
 		};
-		const button = parent.createEl('button', {
-			cls: `agent-dashboard-proposal-button ${kind}`,
-			attr: { type: 'button' },
-		});
-		button.createSpan({ text: labels[kind] });
-		button.disabled = !enabled;
-		if (!enabled && disabledReason) {
-			button.setAttr('title', disabledReason);
-		}
-		this.registerDomEvent(button, 'click', () => {
-			if (kind === 'approve' || kind === 'reject') {
-				void this.handleProposalDecision(proposal, kind, button);
-			} else {
-				void this.handleProposalApply(proposal, button);
-			}
-		});
+		renderWorkbench(this.buildWorkbenchHost(workbenchState), parent);
+		this.workbenchStatusEl = workbenchState.workbenchStatusEl;
+		this.persistenceBannerEl = workbenchState.persistenceBannerEl;
+		this.workbenchErrorEl = workbenchState.workbenchErrorEl;
+		this.proposalListEl = workbenchState.proposalListEl;
+		this.auditListEl = workbenchState.auditListEl;
+		this.workbenchToken = workbenchState.workbenchToken;
+		this.organizeBusy = workbenchState.organizeBusy;
 	}
 
-	private renderPreviewBlock(parent: HTMLElement, label: string, content: string): void {
-		const block = parent.createDiv({ cls: 'agent-dashboard-proposal-preview-block' });
-		block.createEl('strong', { text: label });
-		block.createEl('pre', { text: content || '（空）' });
+	private buildWorkbenchHost(workbenchState: {
+		workbenchStatusEl: HTMLElement | null;
+		persistenceBannerEl: HTMLElement | null;
+		workbenchErrorEl: HTMLElement | null;
+		proposalListEl: HTMLElement | null;
+		auditListEl: HTMLElement | null;
+		workbenchToken: number;
+		organizeBusy: boolean;
+	}): WorkbenchPageHost {
+		return {
+			proposals: this.proposals,
+			approvals: this.approvals,
+			applyService: this.applyService,
+			organize: this.organize,
+			audit: this.audit,
+			persistence: this.persistence,
+			get workbenchStatusEl() { return workbenchState.workbenchStatusEl; },
+			set workbenchStatusEl(value) { workbenchState.workbenchStatusEl = value; },
+			get persistenceBannerEl() { return workbenchState.persistenceBannerEl; },
+			set persistenceBannerEl(value) { workbenchState.persistenceBannerEl = value; },
+			get workbenchErrorEl() { return workbenchState.workbenchErrorEl; },
+			set workbenchErrorEl(value) { workbenchState.workbenchErrorEl = value; },
+			get proposalListEl() { return workbenchState.proposalListEl; },
+			set proposalListEl(value) { workbenchState.proposalListEl = value; },
+			get auditListEl() { return workbenchState.auditListEl; },
+			set auditListEl(value) { workbenchState.auditListEl = value; },
+			get workbenchToken() { return workbenchState.workbenchToken; },
+			set workbenchToken(value) { workbenchState.workbenchToken = value; },
+			get organizeBusy() { return workbenchState.organizeBusy; },
+			set organizeBusy(value) { workbenchState.organizeBusy = value; },
+			isClosed: () => this.isClosed,
+			registerDomEvent: (el, type, callback) => {
+				this.registerDomEvent(el, type as 'pointerdown', (event: Event) => callback(event));
+			},
+			getErrorMessage: (error) => this.getErrorMessage(error),
+			lifecycleStatusText: () => this.lifecycleStatusText(),
+			formatDateTime: (value) => this.formatDateTime(value),
+			openSettings: () => {
+				const setting = (this.app as unknown as { setting?: { open?: () => void } }).setting;
+				setting?.open?.();
+			},
+		};
 	}
-
-	private async handleProposalDecision(
-		proposal: Proposal,
-		decision: 'approve' | 'reject',
-		button: HTMLButtonElement,
-	): Promise<void> {
-		if (button.disabled) {
-			return;
-		}
-		button.disabled = true;
-		const verb = decision === 'approve' ? '批准' : '拒绝';
-		this.setWorkbenchStatus(`正在${verb} ${proposal.target_path}…`);
-		this.setWorkbenchError('');
-		try {
-			await this.approvals.decide(proposal.proposal_id, decision, createRequestContext('user'));
-			this.setWorkbenchStatus(`已${verb}`);
-			await this.refreshWorkbench();
-		} catch (error) {
-			this.setWorkbenchStatus(`${verb}失败`);
-			this.setWorkbenchError(this.getErrorMessage(error));
-		}
-	}
-
-	private async handleProposalApply(proposal: Proposal, button: HTMLButtonElement): Promise<void> {
-		if (button.disabled) {
-			return;
-		}
-		button.disabled = true;
-		this.setWorkbenchStatus(`正在执行写入 ${proposal.target_path}…`);
-		this.setWorkbenchError('');
-		try {
-			const result = await this.applyService.apply(proposal.proposal_id, createRequestContext('user'));
-			if (result.status === 'applied') {
-				this.setWorkbenchStatus(`写入完成：${proposal.target_path}`);
-			} else {
-				const code = result.error_code ? `（${result.error_code}）` : '';
-				this.setWorkbenchStatus('执行写入未完成');
-				this.setWorkbenchError(`写入未完成：${result.status}${code}`);
-			}
-			await this.refreshWorkbench();
-		} catch (error) {
-			this.setWorkbenchStatus('执行写入失败');
-			this.setWorkbenchError(this.getErrorMessage(error));
-		}
-	}
-
-	private renderAuditList(records: AuditRecord[]): void {
-		const list = this.auditListEl;
-		if (!list) {
-			return;
-		}
-		list.empty();
-		if (records.length === 0) {
-			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '暂无审计记录。' });
-			return;
-		}
-		records.forEach((record) => {
-			const row = list.createDiv({ cls: 'agent-dashboard-audit-row' });
-			row.createSpan({ cls: 'agent-dashboard-audit-id', text: record.request_id });
-			row.createSpan({ cls: 'agent-dashboard-audit-path', text: record.path || '—' });
-			const okResult = record.result === 'success' || record.result === 'applied';
-			row.createSpan({
-				cls: `agent-dashboard-audit-result${okResult ? ' ok' : ' warn'}`,
-				text: record.result,
-			});
-			row.createSpan({ cls: 'agent-dashboard-audit-time', text: this.formatDateTime(record.created_at) });
-		});
-	}
-
-private setWorkbenchStatus(message: string): void {
-			this.workbenchStatusEl?.setText(message);
-			/* 给持久化横幅添加视觉反馈闪烁 */
-			if (message.includes('正在') && this.persistenceBannerEl) {
-				this.persistenceBannerEl.addClass('agent-dashboard-persistence-busy');
-			} else if (this.persistenceBannerEl) {
-				this.persistenceBannerEl.removeClass('agent-dashboard-persistence-busy');
-			}
-		}
-
-	private setWorkbenchError(message: string): void {
-		const errorEl = this.workbenchErrorEl;
-		if (!errorEl) {
-			return;
-		}
-		errorEl.empty();
-		if (message) {
-			errorEl.createSpan({ text: message });
-		}
-		errorEl.hidden = !message;
-	}
-
 	private formatDateTime(value: string): string {
 		const date = new Date(value);
 		if (Number.isNaN(date.getTime())) {
@@ -984,261 +708,24 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 			item.createSpan({ cls: 'agent-dashboard-graph-lens__count', text: String(count) });
 		});
 
-		this.renderGraphCanvas(canvas, graphData.nodes, graphData.edges, searchInput, emptyHint);
+		renderGraphCanvas(canvas, graphData.nodes, graphData.edges, searchInput, {
+			registerDomEvent: (el, type, callback) => {
+				this.registerDomEvent(el as HTMLElement, type as 'pointerdown', (event: Event) => callback(event));
+			},
+			openPath: async (path) => {
+				const file = this.app.vault.getAbstractFileByPath(path);
+				if (file instanceof TFile) {
+					await this.app.workspace.getLeaf('tab').openFile(file);
+				} else {
+					this.setFeedback(`找不到笔记：${path}`);
+				}
+			},
+			setFeedback: (message) => this.setFeedback(message),
+			onRefresh: (refresh) => { this.graphRefreshCallback = refresh; },
+		});
 	}
 
-	/** 渲染力导向图：斥力 + 弹簧力布局，支持拖拽、悬停高亮、点击打开、搜索定位。 */
-	private renderGraphCanvas(
-		canvas: HTMLCanvasElement,
-		nodes: Array<{ id: string; title: string; type: string; degree: number }>,
-		edges: Array<{ source: string; target: string }>,
-		searchInput: HTMLInputElement,
-		emptyHint: HTMLElement,
-	): void {
-		const container = canvas.parentElement;
-		if (!container) return;
-		const ctx = canvas.getContext('2d');
-		if (!ctx) return;
 
-		const typeColors: Record<string, string> = {
-			wiki: '#8b5cf6',
-			raw: '#10b981',
-			inbox: '#f59e0b',
-			note: '#3b82f6',
-		};
-
-		const positions = new Map<string, { x: number; y: number; vx: number; vy: number; r: number }>();
-		const width = (): number => container.clientWidth;
-		const height = (): number => container.clientHeight;
-		let initialized = false;
-		let area = 80;
-
-		/* 惰性初始化：页面隐藏时容器尺寸为 0，必须等容器可见后再布局，否则节点全部挤在原点。 */
-		const initializePositions = (): void => {
-			if (positions.size > 0) return;
-			const w = Math.max(1, width());
-			const h = Math.max(1, height());
-			area = nodes.length > 0 ? Math.sqrt((w * h) / nodes.length) : 80;
-			nodes.forEach((node, index) => {
-				const angle = (index / Math.max(1, nodes.length)) * Math.PI * 2;
-				const radius = Math.min(w, h) * 0.35 * (0.6 + 0.4 * Math.random());
-				positions.set(node.id, {
-					x: w / 2 + Math.cos(angle) * radius,
-					y: h / 2 + Math.sin(angle) * radius,
-					vx: 0,
-					vy: 0,
-					r: Math.max(5, Math.min(16, 6 + Math.sqrt(node.degree) * 2)),
-				});
-			});
-		};
-
-		const DPR = window.devicePixelRatio || 1;
-		const resize = (): void => {
-			canvas.width = Math.max(1, Math.floor(Math.max(1, width()) * DPR));
-			canvas.height = Math.max(1, Math.floor(Math.max(1, height()) * DPR));
-			ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
-		};
-		resize();
-
-		let dragId: string | null = null;
-		let hoverId: string | null = null;
-		let animationFrame = 0;
-		let running = true;
-
-		const nodeAt = (mx: number, my: number): string | null => {
-			let best: string | null = null;
-			let bestDist = 30;
-			positions.forEach((pos, id) => {
-				const d = Math.hypot(mx - pos.x, my - pos.y);
-				if (d < bestDist) { bestDist = d; best = id; }
-			});
-			return best;
-		};
-
-		const step = (): void => {
-			const valid: Array<{ id: string; pos: { x: number; y: number; vx: number; vy: number; r: number } }> = [];
-			positions.forEach((pos, id) => valid.push({ id, pos }));
-			const spring = 120;
-			/* 弹簧力（沿边） */
-			for (const edge of edges) {
-				const a = positions.get(edge.source);
-				const b = positions.get(edge.target);
-				if (!a || !b || a === b) continue;
-				const dx = b.x - a.x;
-				const dy = b.y - a.y;
-				const dist = Math.max(1, Math.hypot(dx, dy));
-				const force = (dist - spring) * 0.02;
-				const fx = (dx / dist) * force;
-				const fy = (dy / dist) * force;
-				if (dragId !== edge.source) { a.vx += fx; a.vy += fy; }
-				if (dragId !== edge.target) { b.vx -= fx; b.vy -= fy; }
-			}
-			/* 斥力（所有节点对） */
-			for (let i = 0; i < valid.length; i += 1) {
-				for (let j = i + 1; j < valid.length; j += 1) {
-					const a = valid[i]?.pos;
-					const b = valid[j]?.pos;
-					if (!a || !b) continue;
-					const dx = b.x - a.x;
-					const dy = b.y - a.y;
-					const dist = Math.max(1, Math.hypot(dx, dy));
-					const force = Math.min(600, (area * area) / (dist * dist)) * 0.5;
-					const fx = (dx / dist) * force;
-					const fy = (dy / dist) * force;
-					if (dragId !== valid[i]?.id) { a.vx -= fx; a.vy -= fy; }
-					if (dragId !== valid[j]?.id) { b.vx += fx; b.vy += fy; }
-				}
-			}
-			for (const item of valid) {
-				item.pos.vx *= 0.85;
-				item.pos.vy *= 0.85;
-				item.pos.vx += (width() / 2 - item.pos.x) * 0.001;
-				item.pos.vy += (height() / 2 - item.pos.y) * 0.001;
-				if (dragId !== item.id) {
-					item.pos.x += item.pos.vx;
-					item.pos.y += item.pos.vy;
-				}
-				item.pos.x = Math.max(10, Math.min(width() - 10, item.pos.x));
-				item.pos.y = Math.max(10, Math.min(height() - 10, item.pos.y));
-			}
-		};
-
-		const draw = (): void => {
-			ctx.clearRect(0, 0, width(), height());
-			ctx.lineWidth = 1;
-			ctx.strokeStyle = 'rgba(128,128,128,0.25)';
-			for (const edge of edges) {
-				const a = positions.get(edge.source);
-				const b = positions.get(edge.target);
-				if (!a || !b) continue;
-				ctx.beginPath();
-				ctx.moveTo(a.x, a.y);
-				ctx.lineTo(b.x, b.y);
-				ctx.stroke();
-			}
-			for (const node of nodes) {
-				const pos = positions.get(node.id);
-				if (!pos) continue;
-				const active = hoverId === node.id || dragId === node.id;
-				const color = typeColors[node.type] ?? '#3b82f6';
-				ctx.beginPath();
-				ctx.arc(pos.x, pos.y, pos.r, 0, Math.PI * 2);
-				ctx.fillStyle = active ? color : `${color}cc`;
-				ctx.fill();
-				if (active) {
-					ctx.strokeStyle = '#ffffff';
-					ctx.lineWidth = 2;
-					ctx.stroke();
-				}
-			}
-			if (hoverId) {
-				const node = nodes.find((n) => n.id === hoverId);
-				const pos = positions.get(hoverId);
-				if (node && pos) {
-					ctx.font = '12px sans-serif';
-					ctx.fillStyle = 'rgba(30,30,30,0.9)';
-					ctx.fillText(node.title, pos.x + pos.r + 4, pos.y + 4);
-				}
-			}
-		};
-
-		let iterations = 0;
-		const loop = (): void => {
-			if (!running || !canvas.isConnected) {
-				running = false;
-				if (animationFrame) window.cancelAnimationFrame(animationFrame);
-				return;
-			}
-			if (!initialized) {
-				if (width() === 0 || height() === 0) {
-					/* 容器尚不可见（页面被隐藏），等待下一帧再初始化 */
-					animationFrame = window.requestAnimationFrame(loop);
-					return;
-				}
-				resize();
-				initializePositions();
-				initialized = true;
-				iterations = 0;
-			}
-			if (iterations < 200 || dragId !== null) {
-				step();
-				iterations += 1;
-				draw();
-				animationFrame = window.requestAnimationFrame(loop);
-			} else {
-				draw();
-			}
-		};
-		loop();
-
-		/* 每次切换到星图页时重新测量并重排（容器从 hidden 变为可见） */
-		this.graphRefreshCallback = (): void => {
-			resize();
-			if (initialized) {
-				positions.clear();
-				initializePositions();
-				iterations = 0;
-				loop();
-			}
-		};
-
-		const toLocal = (event: PointerEvent): { x: number; y: number } => {
-			const rect = canvas.getBoundingClientRect();
-			return { x: event.clientX - rect.left, y: event.clientY - rect.top };
-		};
-
-		this.registerDomEvent(canvas, 'pointerdown', (event: PointerEvent) => {
-			const { x, y } = toLocal(event);
-			dragId = nodeAt(x, y);
-			if (dragId) {
-				canvas.setPointerCapture(event.pointerId);
-				iterations = 0;
-				loop();
-			}
-		});
-		this.registerDomEvent(canvas, 'pointermove', (event: PointerEvent) => {
-			const { x, y } = toLocal(event);
-			if (dragId) {
-				const pos = positions.get(dragId);
-				if (pos) { pos.x = x; pos.y = y; }
-			} else {
-				hoverId = nodeAt(x, y);
-				canvas.style.cursor = hoverId ? 'pointer' : 'default';
-				draw();
-			}
-		});
-		this.registerDomEvent(canvas, 'pointerup', () => {
-			if (!dragId) return;
-			dragId = null;
-			iterations = 0;
-			loop();
-		});
-		this.registerDomEvent(canvas, 'click', (event: PointerEvent) => {
-			const { x, y } = toLocal(event);
-			const id = nodeAt(x, y);
-			if (!id) return;
-			const file = this.app.vault.getAbstractFileByPath(id);
-			if (file instanceof TFile) {
-				void this.app.workspace.getLeaf('tab').openFile(file);
-			} else {
-				this.setFeedback(`找不到笔记：${id}`);
-			}
-		});
-
-		/* 搜索定位节点 */
-		this.registerDomEvent(searchInput, 'input', () => {
-			const query = searchInput.value.trim().toLocaleLowerCase();
-			if (!query) { hoverId = null; draw(); return; }
-			const found = nodes.find((node) =>
-				node.title.toLocaleLowerCase().includes(query) || node.id.toLocaleLowerCase().includes(query),
-			);
-			hoverId = found?.id ?? null;
-			draw();
-		});
-
-		/* 视图关闭时（canvas 被移除）停止动画与事件 */
-		this.registerDomEvent(window, 'resize', resize);
-	}
 
 	private renderHotPage(parent: HTMLElement): void {
 		const section = parent.createEl('section');
@@ -1469,113 +956,21 @@ graphHeading.createEl('h2', { text: '知识星图预览' });
 	}
 
 	private renderChatPage(parent: HTMLElement): void {
-		const card = parent.createEl('section', {
-			cls: 'agent-dashboard-surface agent-dashboard-chat-card',
-			attr: { 'aria-label': '对话' },
-		});
-		const header = card.createDiv({ cls: 'agent-dashboard-surface-header' });
-		const heading = header.createDiv();
-		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '💬 CHAT' });
-		heading.createEl('h2', { text: '对话' });
-		heading.createEl('p', { text: '墨忆台助手：会引用 Vault 里相关的笔记回答你。需在设置中配置模型（云端 API 或本地 Ollama）。' });
-
-		const clearBtn = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
-		clearBtn.createSpan({ text: '清空对话' });
-		this.registerDomEvent(clearBtn, 'click', () => {
-			this.chatService?.clearMessages();
-			this.chatMessagesEl?.empty();
-			this.appendChatWelcome();
-		});
-
-		/* 消息列表 */
-		const messageList = card.createDiv({ cls: 'agent-dashboard-chat-messages' });
-		this.chatMessagesEl = messageList;
-		this.appendChatWelcome();
-
-		/* 输入区 */
-		const inputArea = card.createDiv({ cls: 'agent-dashboard-chat-input-area' });
-		const input = inputArea.createEl('input', {
-			cls: 'agent-dashboard-chat-input',
-			attr: { type: 'text', placeholder: '输入你的问题…（回车发送）', 'aria-label': '输入消息' },
-		});
-		const sendBtn = inputArea.createEl('button', {
-			cls: 'agent-dashboard-chat-send-btn',
-			attr: { type: 'button', 'aria-label': '发送' },
-		});
-		sendBtn.createSpan({ text: '发送' });
-		const stopBtn = inputArea.createEl('button', {
-			cls: 'agent-dashboard-chat-send-btn',
-			attr: { type: 'button', 'aria-label': '停止生成' },
-		});
-		stopBtn.createSpan({ text: '停止' });
-		stopBtn.hidden = true;
-
-		this.registerDomEvent(sendBtn, 'click', () => void this.handleChatSend(input, sendBtn, stopBtn));
-		this.registerDomEvent(input, 'keydown', (e: KeyboardEvent) => {
-			if (e.key === 'Enter' && !e.shiftKey) {
-				e.preventDefault();
-				void this.handleChatSend(input, sendBtn, stopBtn);
-			}
-		});
-		this.registerDomEvent(stopBtn, 'click', () => {
-			this.chatService?.stop();
-			stopBtn.hidden = true;
-			sendBtn.disabled = false;
-		});
-	}
-
-	private appendChatWelcome(): void {
-		if (!this.chatMessagesEl) return;
-		const msg = this.chatMessagesEl.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
-		msg.createSpan({ text: '你好！我是墨忆台助手。问我关于你笔记的问题吧。' });
-	}
-
-	private appendChatMessage(role: 'user' | 'assistant', text: string): void {
-		if (!this.chatMessagesEl) return;
-		const msg = this.chatMessagesEl.createDiv({ cls: `agent-dashboard-chat-message agent-dashboard-chat-message--${role}` });
-		msg.createSpan({ text });
-		this.chatMessagesEl.scrollTop = this.chatMessagesEl.scrollHeight;
-	}
-
-	private async handleChatSend(input: HTMLInputElement, sendBtn: HTMLButtonElement, stopBtn: HTMLButtonElement): Promise<void> {
-		const text = input.value.trim();
-		if (!text) return;
-		if (!this.chatService) {
-			this.appendChatMessage('assistant', '对话服务未初始化，请重启插件后再试。');
-			return;
-		}
-		input.value = '';
-		sendBtn.disabled = true;
-		this.appendChatMessage('user', text);
-
-		/* 助手占位 + 流式输出 */
-		const assistantEl = this.chatMessagesEl?.createDiv({ cls: 'agent-dashboard-chat-message agent-dashboard-chat-message--assistant' });
-		const contentEl = assistantEl?.createSpan();
-		contentEl?.setText('思考中…');
-		stopBtn.hidden = false;
-
-		const unsubscribe = this.chatService.on((event) => {
-			if (this.isClosed || !contentEl) return;
-			if (event.type === 'delta') {
-				contentEl.setText((contentEl.getText() === '思考中…' ? '' : contentEl.getText()) + (event.content ?? ''));
-				if (this.chatMessagesEl) this.chatMessagesEl.scrollTop = this.chatMessagesEl.scrollHeight;
-			} else if (event.type === 'references' && event.references && event.references.length > 0 && assistantEl) {
-				const refs = event.references.slice(0, 3).map((ref) => ref.title).join('、');
-				assistantEl.createDiv({ cls: 'agent-dashboard-chat-refs', text: `📎 引用笔记：${refs}` });
-			} else if (event.type === 'error') {
-				contentEl.setText(`抱歉，出了点问题：${event.error ?? '未知错误'}`);
-			}
-		});
-
-		try {
-			await this.chatService.sendMessage(text);
-		} catch (error) {
-			if (contentEl) contentEl.setText(`抱歉，出了点问题：${this.getErrorMessage(error)}`);
-		} finally {
-			unsubscribe();
-			stopBtn.hidden = true;
-			sendBtn.disabled = false;
-		}
+		const chatState = {
+			chatService: this.chatService,
+			chatMessagesEl: this.chatMessagesEl,
+		};
+		renderChatPage({
+			get chatService() { return chatState.chatService; },
+			get chatMessagesEl() { return chatState.chatMessagesEl; },
+			set chatMessagesEl(value) { chatState.chatMessagesEl = value; },
+			isClosed: () => this.isClosed,
+			registerDomEvent: (el, type, callback) => {
+				this.registerDomEvent(el, type as 'pointerdown', (event: Event) => callback(event));
+			},
+			getErrorMessage: (error) => this.getErrorMessage(error),
+		}, parent);
+		this.chatMessagesEl = chatState.chatMessagesEl;
 	}
 
 	private showPage(target: string): void {
@@ -2005,209 +1400,46 @@ this.registerDomEvent(button, 'click', () => {
 	}
 
 	private renderProjectTracker(parent: HTMLElement): void {
-		const card = parent.createEl('article', {
-			cls: 'agent-dashboard-surface agent-dashboard-list-card',
-			attr: { id: 'agent-dashboard-agents', 'aria-labelledby': 'agent-dashboard-feed-title' },
-		});
-		const header = card.createDiv({ cls: 'agent-dashboard-surface-header compact' });
-		const heading = header.createDiv();
-		heading.createSpan({ cls: 'agent-dashboard-eyebrow', text: '关注的项目' });
-		heading.createEl('h2', { attr: { id: 'agent-dashboard-feed-title' }, text: '项目追踪' });
-		heading.createEl('p', { text: '你关注的 GitHub 项目的版本、提交与讨论动态。' });
-		const refresh = header.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
-		refresh.createSpan({ text: '刷新' });
-		this.registerDomEvent(refresh, 'click', () => {
-			refresh.disabled = true;
-			void this.loadProjectSnapshots(true).finally(() => { refresh.disabled = false; });
-		});
-
-		const list = card.createDiv({ cls: 'agent-dashboard-feed-list' });
-		this.projectListEl = list;
-		void this.loadProjectSnapshots(false);
+		const projectState = {
+			projectListEl: this.projectListEl,
+			projectTrackerBusy: this.projectTrackerBusy,
+		};
+		renderProjectTracker(this.buildProjectHost(projectState), parent);
+		this.projectListEl = projectState.projectListEl;
+		this.projectTrackerBusy = projectState.projectTrackerBusy;
 	}
 
-	private async loadProjectSnapshots(force: boolean): Promise<void> {
-		const list = this.projectListEl;
-		if (!list || this.isClosed || this.projectTrackerBusy) {
-			return;
-		}
-		this.projectTrackerBusy = true;
-		list.empty();
-		try {
-			const repos = this.projectTracker.getRepos();
-			if (repos.length === 0) {
-				list.createDiv({ cls: 'agent-dashboard-empty-state', text: '还没有关注的项目，请在设置中添加。' });
-				return;
-			}
-			const snapshots = await Promise.all(repos.map((repo) => this.projectTracker.refresh(repo, force)));
-			if (this.isClosed || this.projectListEl !== list) {
-				return;
-			}
-			list.empty();
-			snapshots.forEach((snapshot) => this.renderProjectSnapshot(list, snapshot));
-		} catch {
-			list.empty();
-			list.createDiv({ cls: 'agent-dashboard-empty-state', text: '加载项目动态失败，请稍后重试。' });
-		} finally {
-			this.projectTrackerBusy = false;
-		}
-	}
-
-private renderProjectSnapshot(parent: HTMLElement, snapshot: RepoSnapshot): void {
-			const card = parent.createEl('article', { cls: 'agent-dashboard-project-card' });
-			const top = card.createDiv({ cls: 'agent-dashboard-project-top' });
-			top.createEl('strong', { cls: 'agent-dashboard-project-name', text: snapshot.fullName });
-			const meta: string[] = [];
-			if (snapshot.stars > 0) meta.push(`★ ${snapshot.stars}`);
-			if (snapshot.releases[0]) meta.push(`最新版本 ${snapshot.releases[0].tag}`);
-			if (snapshot.error) meta.push(snapshot.error);
-			top.createSpan({ cls: 'agent-dashboard-project-meta', text: meta.join(' · ') || '暂无数据' });
-
-			const openButton = card.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
-			openButton.createSpan({ text: '打开 GitHub' });
-			this.registerDomEvent(openButton, 'click', () => {
-				void this.openGitHubUrl(`https://github.com/${snapshot.fullName}`);
-			});
-
-			/* AI 中文提炼摘要：自动生成，直接展示在卡片内 */
-			const summaryEl = card.createDiv({ cls: 'agent-dashboard-project-summary' });
-			summaryEl.createSpan({ cls: 'agent-dashboard-project-label', text: '🤖 AI 中文摘要（更新了什么）' });
-			const summaryBody = summaryEl.createDiv({ cls: 'agent-dashboard-project-summary-body', text: '正在生成摘要…' });
-			void this.loadProjectSummary(snapshot, summaryBody);
-
-			/* 一键生成并保存完整中文动态报告（保存到 Reports 并打开） */
-			const reportButton = card.createEl('button', { cls: 'agent-dashboard-subtle-button', attr: { type: 'button' } });
-			reportButton.createSpan({ text: '保存完整报告' });
-			this.registerDomEvent(reportButton, 'click', () => {
-				reportButton.disabled = true;
-				reportButton.setText('生成中…');
-				void this.generateProjectReport(createRequestContext('user'))
-					.then((path) => {
-						new Notice(`报告已生成：${path}`);
-						void this.openNote(path);
-					})
-					.catch((error: unknown) => {
-						showActionError(error);
-					})
-					.finally(() => {
-						reportButton.disabled = false;
-						reportButton.setText('保存完整报告');
-					});
-			});
-
-			if (snapshot.releases.length > 0) {
-				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
-				section.createSpan({ cls: 'agent-dashboard-project-label', text: '版本发布' });
-				snapshot.releases.forEach((release) => {
-					const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
-					row.createSpan({ cls: 'agent-dashboard-project-tag', text: release.tag });
-					const desc = row.createSpan({ cls: 'agent-dashboard-project-desc' });
-					if (release.name) {
-						desc.setText(release.name);
-					} else if (release.body) {
-						desc.setText(release.body.slice(0, 120).replace(/\n/g, ' ').trim());
-					} else {
-						desc.setText('查看详情');
-					}
-					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(release.url); });
-				});
-			} else {
-				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无版本发布记录' });
-			}
-
-			/* 最近提交（无需跳 GitHub 即可阅读） */
-			if (snapshot.commits.length > 0) {
-				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
-				section.createSpan({ cls: 'agent-dashboard-project-label', text: '最近提交' });
-				snapshot.commits.slice(0, 8).forEach((commit) => {
-					const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
-					row.createSpan({ cls: 'agent-dashboard-project-tag', text: commit.sha });
-					const desc = row.createSpan({ cls: 'agent-dashboard-project-desc' });
-					desc.setText(`${commit.message}${commit.date ? ` · ${this.formatDate(new Date(commit.date))}` : ''}`);
-					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(commit.url); });
-				});
-			} else if (!snapshot.error) {
-				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无提交记录' });
-			}
-
-			/* 讨论动态（Issues / PR） */
-			if (snapshot.issues.length > 0) {
-				const section = card.createDiv({ cls: 'agent-dashboard-project-section' });
-				section.createSpan({ cls: 'agent-dashboard-project-label', text: '讨论动态' });
-				snapshot.issues.slice(0, 8).forEach((issue) => {
-					const row = section.createEl('button', { cls: 'agent-dashboard-project-row', attr: { type: 'button' } });
-					row.createSpan({ cls: `agent-dashboard-project-tag ${issue.state === 'open' ? 'is-open' : 'is-closed'}`, text: issue.kind === 'pr' ? 'PR' : 'Issue' });
-					const desc = row.createSpan({ cls: 'agent-dashboard-project-desc' });
-					desc.setText(issue.title);
-					this.registerDomEvent(row, 'click', () => { void this.openGitHubUrl(issue.url); });
-				});
-			} else if (!snapshot.error) {
-				card.createDiv({ cls: 'agent-dashboard-empty-state agent-dashboard-project-empty', text: '暂无讨论动态' });
-			}
-		}
-
-	private async openGitHubUrl(url: string): Promise<void> {
-		const win = this.containerEl.ownerDocument.defaultView;
-		if (win && win.open) {
-			win.open(url, '_blank', 'noopener');
-			return;
-		}
-		this.setFeedback(`请手动打开：${url}`);
+	private buildProjectHost(projectState: { projectListEl: HTMLElement | null; projectTrackerBusy: boolean }): ProjectPageHost {
+		return {
+			projectTracker: this.projectTracker,
+			projectReport: this.projectReport,
+			workbenchWrite: this.workbenchWrite,
+			get projectListEl() { return projectState.projectListEl; },
+			set projectListEl(value) { projectState.projectListEl = value; },
+			get projectTrackerBusy() { return projectState.projectTrackerBusy; },
+			set projectTrackerBusy(value) { projectState.projectTrackerBusy = value; },
+			isClosed: () => this.isClosed,
+			registerDomEvent: (el, type, callback) => {
+				this.registerDomEvent(el, type as 'pointerdown', (event: Event) => callback(event));
+			},
+			setFeedback: (message) => this.setFeedback(message),
+			openNote: (path) => this.openNote(path),
+			formatDate: (date) => this.formatDate(date),
+			openExternal: (url) => {
+				const win = this.containerEl.ownerDocument.defaultView;
+				if (win && win.open) {
+					win.open(url, '_blank', 'noopener');
+					return;
+				}
+				this.setFeedback('请手动打开：' + url);
+			},
+		};
 	}
 
 	private async generateProjectReport(context: RequestContext): Promise<string> {
-		const repos = this.projectTracker.getRepos();
-		const snapshots = await Promise.all(repos.map((repo) => this.projectTracker.refresh(repo, true)));
-		const parts: string[] = [];
-		for (const snapshot of snapshots) {
-			const result = await this.projectReport.generateReport(snapshot, context);
-			if (result.report) {
-				parts.push(`# ${snapshot.fullName}\n\n${result.report}`);
-			} else if (result.error) {
-				parts.push(`# ${snapshot.fullName}\n\n> ${result.error}`);
-			}
-		}
-		if (parts.length === 0) {
-			throw new Error('没有可生成的报告内容');
-		}
-		const date = new Date();
-		const fileName = `项目动态-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
-		await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
-		const path = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
-		await this.app.vault.create(path, parts.join('\n\n---\n\n') + '\n');
-		return path;
+		const projectState = { projectListEl: this.projectListEl, projectTrackerBusy: this.projectTrackerBusy };
+		return generateProjectReport(this.buildProjectHost(projectState), context);
 	}
-
-	/** 在项目卡片内直接生成并展示 AI 中文提炼摘要（会话内缓存，避免重复调用模型）。 */
-	private async loadProjectSummary(snapshot: RepoSnapshot, el: HTMLElement): Promise<void> {
-		const cached = this.projectSummaryCache.get(snapshot.fullName);
-		if (cached) {
-			el.setText(cached);
-			return;
-		}
-		try {
-			const result = await this.projectReport.generateReport(snapshot, createRequestContext('background-task'));
-			if (this.isClosed) return;
-			if (result.report) {
-				/* 粗略去除 Markdown 符号，以纯文本展示 */
-				const text = result.report
-					.replace(/[#*>`-]/g, ' ')
-					.replace(/\s+/g, ' ')
-					.trim();
-				this.projectSummaryCache.set(snapshot.fullName, text);
-				el.setText(text);
-			} else if (result.error) {
-				el.setText(`摘要生成失败：${result.error}`);
-			} else {
-				el.setText('该项目最近没有可总结的动态。');
-			}
-		} catch {
-			if (!this.isClosed) {
-				el.setText('摘要生成失败：模型未配置或网络异常（请在「设置 → 墨忆台 · 模型设置」中配置）。');
-			}
-		}
-	}
-
 	private async handleRefresh(button: HTMLButtonElement): Promise<void> {
 		if (button.disabled) {
 			return;

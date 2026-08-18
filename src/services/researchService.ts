@@ -1,8 +1,9 @@
-import { App, requestUrl, normalizePath } from 'obsidian';
+import { requestUrl, normalizePath } from 'obsidian';
 import type { RequestContext } from '../application/requestContext.ts';
 import { createRequestContext } from '../application/requestContext.ts';
 import { WORKBENCH_DIRS } from '../data/dashboardTypes.ts';
 import type { ResearchPort, ResearchTask, ResearchSource } from '../ports/researchPort.ts';
+import type { WorkbenchWriteService } from './workbenchWriteService.ts';
 
 const SEARCH_API = 'https://api.duckduckgo.com/?q=%s&format=json&no_html=1';
 /** 生成报告文件名时查询词截断长度。 */
@@ -21,12 +22,10 @@ const SENSITIVE_PATTERNS: Array<{ pattern: RegExp; label: string }> = [
 
 /** Background research service that searches the web and saves results as vault notes. */
 export class ResearchService implements ResearchPort {
-	private readonly app: App;
 	private tasks = new Map<string, ResearchTask>();
 	private readonly requestUrl: typeof requestUrl;
 
-	constructor(app: App) {
-		this.app = app;
+	constructor(private readonly workbenchWrite: WorkbenchWriteService) {
 		this.requestUrl = requestUrl;
 	}
 
@@ -107,18 +106,28 @@ export class ResearchService implements ResearchPort {
 				? `关于「${task.query}」的研究结果：找到 ${sources.length} 个相关来源。`
 				: `关于「${task.query}」的研究：未找到相关结果。`;
 
-			/* Save results as vault note */
-			const date = new Date();
-			const fileName = `研究-${task.query.slice(0, FILENAME_QUERY_SLICE).replace(/[\\?*[\]]/g, '_')}-${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}.md`;
-			const content = this.formatReport(task.query, summary, sources);
-			await this.app.vault.adapter.mkdir(WORKBENCH_DIRS.reports);
-			const reportPath = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
-			await this.app.vault.create(reportPath, content);
+			/* Cancel check: the user may have cancelled while the network call was in flight. */
+			if (this.tasks.get(task.taskId)?.status === 'cancelled') return;
 
-			task.result = { summary, sources, reportPath };
+			/* Save results as vault note through the unified generated-content writer. */
+			const date = new Date();
+			const stamp = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}-${String(date.getHours()).padStart(2, '0')}-${String(date.getMinutes()).padStart(2, '0')}-${String(date.getSeconds()).padStart(2, '0')}`;
+			const fileName = `研究-${task.query.slice(0, FILENAME_QUERY_SLICE).replace(/[\\?*[\]]/g, '_')}-${stamp}.md`;
+			const content = this.formatReport(task.query, summary, sources);
+			const reportPath = normalizePath(`${WORKBENCH_DIRS.reports}/${fileName}`);
+			const writeResult = await this.workbenchWrite.writeGenerated({ path: reportPath, content, kind: 'research', context });
+			if (writeResult.status === 'failed') {
+				throw new Error(writeResult.error_code ?? '研究报告写入失败');
+			}
+			if (writeResult.status === 'skipped') {
+				throw new Error('研究报告已存在，未覆盖');
+			}
+
+			task.result = { summary, sources, reportPath: writeResult.path };
 			task.status = 'completed';
 			task.completedAt = new Date().toISOString();
 		} catch (error) {
+			if (this.tasks.get(task.taskId)?.status === 'cancelled') return;
 			task.status = 'failed';
 			task.error = error instanceof Error ? error.message : '研究任务失败';
 		}
