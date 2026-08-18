@@ -1,7 +1,9 @@
 # Persistence Runtime Integration 基线 PRD
 
+> **文档性质：历史基线快照。** 下文的分支、提交、测试数量和“当前状态”均以 2026-08-09 的审查时点为准，不代表当前 `main`。当前 HEAD 状态见 [`AGENT-HANDOFF-PROMPT.md`](AGENT-HANDOFF-PROMPT.md)。
+
 > 基线日期：2026-08-09  
-> 仓库：`E:/TT/workbuddy工作/2026-08-08-12-17-00`  
+> 仓库：历史审查 checkout（具体机器路径不作为当前路径）
 > 分支：`feat/memory-workbench-foundation`  
 > 本文仅记录运行时持久化接入基线与验收边界，不包含业务源码改动。
 
@@ -12,7 +14,7 @@
 - **Programming Language**：TypeScript（Vite + React + MUI + Tailwind CSS 默认约定不适用于当前 Obsidian 插件；本仓库实际为 Obsidian Plugin + TypeScript + esbuild）
 - **原始需求复述**：核对 Persistence Runtime Integration 真实基线，确认 ProposalStore、ApprovalStore、AuditStore 的运行时实现，Jsonl/持久化 adapter 是否存在，插件启动恢复是否存在，列出 P0 缺口与本轮严格范围和验收标准；不得修改业务源码、`.workbuddy/`、`overview.md`，不得提交/推送/合并。
 
-## 2. 当前事实基线
+## 2. 历史事实基线（2026-08-09）
 
 ### 2.1 Git 状态
 
@@ -46,7 +48,7 @@
 
 | 检查 | 结果 | 说明 |
 |---|---|---|
-| `npm test` | **PASS，41/41** | 通过 `npm --prefix E:/TT/workbuddy工作/2026-08-08-12-17-00 test` 执行，包含 `proposalAuditQa.test.ts` |
+| `npm test` | **PASS，41/41** | 历史审查时点的结果，包含 `proposalAuditQa.test.ts`；不代表当前测试数量 |
 | `npm run build` | **FAIL** | `src/adapters/jsonlAuditStore.ts:14` 对 `AuditEvent`/`AuditRecord` 联合类型使用 spread，TS2698/TS2339 |
 | `npm run lint` | **FAIL** | 1 error（同一 `jsonlAuditStore.ts:14` unsafe assignment）+ 14 warnings |
 | `tsc --noEmit` | **FAIL** | 与 build 相同的 3 个 TypeScript 错误 |

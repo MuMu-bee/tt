@@ -364,7 +364,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('补充反向链接')
-			.setDesc('为缺少反向链接的笔记生成补充链接方案。')
+			.setDesc('为 frontmatter 中设置了 related 字段的笔记生成补充链接方案（指向 related 笔记，自链接自动跳过）。')
 			.addToggle((toggle) =>
 				toggle
 					.setValue(this.plugin.settings.featureFlags.organize.links)

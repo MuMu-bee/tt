@@ -22,7 +22,8 @@ export class JsonlAuditStore extends SerializedJsonlStore<AuditRecord> implement
 				await this.flush(context);
 				return 'success';
 			} catch {
-				return 'failed';
+				this.records.set(record.audit_id, { ...record, result: 'pending-compensation', compensation: true });
+				return 'pending-compensation';
 			}
 		});
 	}
@@ -51,8 +52,22 @@ export class JsonlAuditStore extends SerializedJsonlStore<AuditRecord> implement
 				await this.flush(context);
 				return 'success';
 			} catch {
-				// Restore the in-memory pending-compensation state so a later retry can run.
 				this.records.set(recordId, previous);
+				return 'failed';
+			}
+		});
+	}
+
+	/** Marks an existing record as pending compensation (e.g. secondary mirror write failed). */
+	async markCompensation(auditId: string, context: RequestContext): Promise<AuditWriteStatus> {
+		return this.withStore(context, async () => {
+			const event = this.records.get(auditId);
+			if (!event) return 'failed';
+			this.records.set(auditId, { ...event, result: 'pending-compensation', compensation: true });
+			try {
+				await this.flush(context);
+				return 'success';
+			} catch {
 				return 'failed';
 			}
 		});

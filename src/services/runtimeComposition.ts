@@ -2,7 +2,6 @@ import { sha256Hex } from '../utils/sha256.ts';
 import type { App } from 'obsidian';
 import type { AgentDashboardSettings } from '../settings.ts';
 import { toSearchConfig } from '../application/featureFlags.ts';
-import { UnavailableSemanticSearch } from '../adapters/unavailableSemanticSearch.ts';
 import { OllamaSemanticSearch } from '../adapters/ollamaSemanticSearch.ts';
 import { OllamaEmbedding } from '../adapters/ollamaEmbedding.ts';
 import { ObsidianVaultReader } from '../adapters/obsidianVaultReader.ts';
@@ -31,27 +30,38 @@ import { createRequestContext, type RequestContext } from '../application/reques
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts.ts';
 import { PersistenceGate } from './persistenceGate.ts';
 
-export interface RuntimeAuditQuery { listRecent(limit: number, context: RequestContext): Promise<AuditRecord[]>; }
-export interface RuntimeServices { reader: ObsidianVaultReader; index: InMemoryVaultIndex; lifecycle: IndexLifecycleService; search: SearchService; write: WriteService; workbenchWrite: WorkbenchWriteService; organize: OrganizeService; proposals: ProposalService; approvals: ApprovalService; apply: ProposalApplyService; persistence: PersistenceRuntimeStatus; restore(context: RequestContext): Promise<PersistenceRuntimeStatus>; audit: RuntimeAuditQuery; auditSink: import('../ports/auditSink.ts').AuditSink; }
+export interface RuntimeAuditQuery {
+  listRecent(limit: number, context: RequestContext): Promise<AuditRecord[]>;
+  listPendingCompensation(context: RequestContext): Promise<AuditRecord[]>;
+  retry(recordId: string, context: RequestContext): Promise<import('../application/contracts.ts').AuditWriteStatus>;
+}
+export interface RuntimeServices { reader: ObsidianVaultReader; index: InMemoryVaultIndex; lifecycle: IndexLifecycleService; search: SearchService; write: WriteService; workbenchWrite: WorkbenchWriteService; organize: OrganizeService; proposals: ProposalService; approvals: ApprovalService; apply: ProposalApplyService; persistence: PersistenceRuntimeStatus; restore(context: RequestContext): Promise<PersistenceRuntimeStatus>; audit: RuntimeAuditQuery; auditSink: import('../ports/auditSink.ts').AuditSink; rollback: (path: string, context: RequestContext) => Promise<{ rolledBack: boolean; message: string }>; }
 export async function composeRuntime(app: App, settings: AgentDashboardSettings): Promise<RuntimeServices> {
   const reader = new ObsidianVaultReader(app); const index = new InMemoryVaultIndex(reader); const lifecycle = new IndexLifecycleService(reader, index); const flags = settings.featureFlags;
-  const semantic = flags.semantic_search ? new OllamaSemanticSearch(reader, new OllamaEmbedding(settings.agent)) : new UnavailableSemanticSearch();
-  const search = new SearchService(index, semantic, toSearchConfig(flags));
+  /* Semantic adapter is resolved lazily so enabling the flag in settings takes effect without reloading the plugin. */
+  let semanticAdapter: import('../ports/semanticSearchPort.ts').SemanticSearchPort | undefined;
+  const semanticProvider = (): import('../ports/semanticSearchPort.ts').SemanticSearchPort | undefined => {
+    if (!settings.featureFlags.semantic_search) return undefined;
+    semanticAdapter ??= new OllamaSemanticSearch(reader, new OllamaEmbedding(settings.agent));
+    return semanticAdapter;
+  };
+  const search = new SearchService(index, semanticProvider, toSearchConfig(settings.featureFlags), () => ({ semantic_search_enabled: settings.featureFlags.semantic_search, semantic_fallback_enabled: settings.featureFlags.semantic_fallback }));
   const writePort = new ObsidianWritePort(app);
   const auditStore = new JsonlAuditStore(new ObsidianJsonlStorage(app, '_workbench/audit/events.jsonl'));
   const auditDual = new DualJsonlStorage(app, '_workbench/audit/events.jsonl', 'audit/events.jsonl');
   const proposalStore = new JsonlProposalStore(new ObsidianJsonlStorage(app, '_workbench/proposals/records.jsonl'));
   const approvalStore = new JsonlApprovalStore(new ObsidianJsonlStorage(app, '_workbench/approvals/records.jsonl'));
-  const persistenceGate = new PersistenceGate(flags.new_write_pipeline);
+  const persistenceGate = new PersistenceGate(() => settings.featureFlags.new_write_pipeline);
   /* Dual-write audit sink: writes to Vault store + plugin data dir mirror */
   const baseSink = new JsonlAuditSink(auditStore);
   const auditSink: import('../ports/auditSink.ts').AuditSink = {
     append: async (event: AuditRecord, ctx: RequestContext): Promise<void> => {
-      await baseSink.append(event, ctx);
+      const auditId = await baseSink.appendAndGetId(event, ctx);
       /* Secondary mirror only: the Vault file is owned by JsonlAuditStore. */
       const mirrored = await auditDual.writeSecondary(JSON.stringify(event), ctx);
       if (!mirrored) {
-        console.error('[agent-dashboard] 审计镜像（插件数据目录）写入失败，记录仍保留在 Vault 主端。', auditDual.getStatus());
+        console.error('[agent-dashboard] 审计镜像（插件数据目录）写入失败，记录已标记为待补偿。', auditDual.getStatus());
+        await baseSink.markCompensation(auditId, ctx);
       }
     },
     query: async (filter: import('../application/contracts.ts').AuditFilter, ctx: RequestContext) => baseSink.query(filter, ctx),
@@ -100,8 +110,10 @@ export async function composeRuntime(app: App, settings: AgentDashboardSettings)
         .sort((a, b) => (a.created_at < b.created_at ? 1 : a.created_at > b.created_at ? -1 : 0))
         .slice(0, Math.max(0, limit));
     },
+    listPendingCompensation: (context: RequestContext): Promise<AuditRecord[]> => auditStore.listPendingCompensation(context),
+    retry: (recordId: string, context: RequestContext): Promise<import('../application/contracts.ts').AuditWriteStatus> => auditStore.retry(recordId, context),
   };
-  return { reader, index, lifecycle, search, write, workbenchWrite, organize, proposals, approvals, apply, persistence, restore, audit, auditSink };
+  return { reader, index, lifecycle, search, write, workbenchWrite, organize, proposals, approvals, apply, persistence, restore, audit, auditSink, rollback: (path: string, ctx: RequestContext) => rollback.rollback(path, ctx) };
 }
 
 function extractLinks(raw: string): string[] {

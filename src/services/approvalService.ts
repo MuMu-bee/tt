@@ -22,12 +22,13 @@ export class ApprovalService {
       const proposal = await this.proposals.get(proposalId, context);
       if (!proposal) throw new Error('proposal not found');
       if (proposal.status !== 'pending') throw new Error('proposal is not pending: ' + proposal.status);
+      if (proposal.expires_at && Date.parse(proposal.expires_at) < Date.now()) {
+        await this.proposals.updateStatus(proposalId, 'expired', context.child ? context.child() : context);
+        throw new Error('proposal has expired');
+      }
       const record: ApprovalRecord = { approval_id: createRequestId(), proposal_id: proposalId, request_id: context.request_id, decision, actor: 'user', decided_at: new Date().toISOString(), ...(note ? { note } : {}) };
-      /* 1) Persist the decision intent first. */
       await this.approvals.save(record, context.child ? context.child() : context);
       const status: ProposalStatus = decision === 'approve' ? 'approved' : 'rejected';
-      /* 2) Then update the proposal. If this fails, the approval remains and
-         reconcile() will repair the proposal status during the next restore. */
       try {
         await this.proposals.updateStatus(proposalId, status, context.child ? context.child() : context);
       } catch (error) {

@@ -18,9 +18,11 @@ const SNAPSHOTS_DIR = '_workbench/snapshots/';
 /** Saves before/after snapshots on writes and provides rollback. */
 export class RollbackService {
 	private readonly app: App;
+	private readonly auditSink?: AuditSink;
 
-	constructor(app: App, private readonly audit?: AuditSink) {
+	constructor(app: App, auditSink?: AuditSink) {
 		this.app = app;
+		this.auditSink = auditSink;
 	}
 
 	/** Saves a snapshot before applying a write. */
@@ -53,7 +55,6 @@ export class RollbackService {
 				const entry = JSON.parse(content) as RollbackEntry;
 				if (entry.path !== path) continue;
 
-				/* Only rollback if current content matches the after state */
 				const target = this.app.vault.getAbstractFileByPath(path);
 				if (!(target instanceof TFile)) {
 					return { rolledBack: false, message: `找不到文件：${path}` };
@@ -64,16 +65,22 @@ export class RollbackService {
 				}
 
 				await this.app.vault.modify(target, entry.before);
-				await this.audit?.append({
-					request_id: context.request_id,
-					actor: context.actor,
-					action: 'rollback',
-					path,
-					before_hash: entry.after_hash,
-					after_hash: entry.before_hash,
-					result: 'applied',
-					created_at: new Date().toISOString(),
-				}, context);
+				if (this.auditSink) {
+					try {
+						await this.auditSink.append({
+							request_id: context.request_id,
+							actor: context.actor,
+							action: 'rollback',
+							path,
+							before_hash: entry.after_hash,
+							after_hash: entry.before_hash,
+							result: 'rollback',
+							created_at: new Date().toISOString(),
+						}, context);
+					} catch {
+						/* 审计失败不影响回滚本身 */
+					}
+				}
 				return { rolledBack: true, message: `已回滚 ${path} 到修改前状态` };
 			}
 			return { rolledBack: false, message: `未找到 ${path} 的回滚快照` };

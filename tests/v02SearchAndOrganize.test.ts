@@ -57,7 +57,23 @@ test('organize defaults to no changes while preserving fiction proposal policy',
   const scanner: OrganizePort = { scan: async () => [{ path: 'fiction/a.md', title: 'A', content: 'x', frontmatter: {}, tags: [], links: [], hash: 'h', zone: 'fiction' }] };
   const service = new OrganizeService(scanner, { ...DEFAULT_FEATURE_FLAGS, organize: { frontmatter: true, tags: true, links: true, format: true } });
   const plan = await service.plan({ kind: 'global' }, createRequestContext());
-  // bidirectional-link-add 对单文件自链接（target === 自身标题）被跳过，故为 3 项。
+  // bidirectional-link-add 在没有 related 目标时被跳过（自链接也不会生成），故为 3 项。
   assert.equal(plan.changes.length, 3);
   assert.ok(plan.changes.every((change) => change.status === 'proposal_only'));
+});
+
+test('bidirectional link change is generated when a related target exists', async () => {
+  const scanner: OrganizePort = { scan: async () => [{ path: 'notes/a.md', title: 'A', content: 'x', frontmatter: { related: 'B' }, tags: [], links: [], hash: 'h', zone: 'normal' }] };
+  const service = new OrganizeService(scanner, { ...DEFAULT_FEATURE_FLAGS, organize: { frontmatter: false, tags: false, links: true, format: false } });
+  const plan = await service.plan({ kind: 'global' }, createRequestContext());
+  assert.equal(plan.changes.length, 1);
+  assert.equal(plan.changes[0]?.kind, 'bidirectional-link-add');
+  assert.ok(plan.changes[0]?.after.includes('[[B]]'));
+});
+
+test('bidirectional link change skips a related target equal to the note itself', async () => {
+  const scanner: OrganizePort = { scan: async () => [{ path: 'notes/A.md', title: 'A', content: 'x', frontmatter: { related: 'A' }, tags: [], links: [], hash: 'h', zone: 'normal' }] };
+  const service = new OrganizeService(scanner, { ...DEFAULT_FEATURE_FLAGS, organize: { frontmatter: false, tags: false, links: true, format: false } });
+  const plan = await service.plan({ kind: 'global' }, createRequestContext());
+  assert.equal(plan.changes.length, 0);
 });

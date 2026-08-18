@@ -94,7 +94,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		/* V0.5: TaskCoordinator + PatrolService */
 		const taskCoordinator = new TaskCoordinator();
 		this.taskCoordinator = taskCoordinator;
-		const patrolService = new PatrolService(this.app, lifecycle);
+		const patrolService = new PatrolService(this.app, lifecycle, runtime.proposals);
 		taskCoordinator.register({
 			id: 'patrol',
 			name: '定时巡检',
@@ -188,6 +188,24 @@ export default class AgentDashboardPlugin extends Plugin {
 				}
 				if (!checking) {
 					void this.activateDashboardView();
+				}
+				return true;
+			},
+		});
+
+		this.addCommand({
+			id: 'rollback-active-file',
+			name: '回滚当前文件到修改前',
+			checkCallback: (checking: boolean) => {
+				const markdownView =
+					this.app.workspace.getActiveViewOfType(MarkdownView);
+				if (!markdownView || !markdownView.file) {
+					return false;
+				}
+				if (!checking) {
+					void runtime.rollback(markdownView.file.path, createRequestContext('user')).then((result) => {
+						new Notice(result.message);
+					});
 				}
 				return true;
 			},
@@ -315,6 +333,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		await this.saveData(stripSecrets(this.settings));
 		if (this.secretFile) await this.secretFile.write(this.secrets);
 		this.projectTracker?.setRepos(this.settings.projectTracker.repos);
+		this.projectTracker?.setToken(this.settings.projectTracker.githubToken);
 	}
 
 	private refreshDashboardViews(forceFeeds = false): void {
