@@ -4,7 +4,7 @@ import {
 	DEFAULT_SETTINGS,
 	AgentDashboardSettings,
 } from './settings';
-import { WORKBENCH_DIRS } from './data/dashboardTypes';
+import { WORKBENCH_DIRS, normalizeProjectTrackerSettings } from './data/dashboardTypes';
 import { OpenAiModel } from './adapters/openAiModel';
 import { isMarkdownPath } from './services/indexLifecycleService';
 import { composeRuntime } from './services/runtimeComposition';
@@ -37,6 +37,7 @@ import {
 	AgentDashboardView,
 	VIEW_TYPE_AGENT_DASHBOARD,
 } from './views/AgentDashboardView';
+import { ProjectTrackerSettingsModal } from './ui/ProjectTrackerSettingsModal';
 
 const AUTO_REPORT_POLL_MS = 60_000;
 
@@ -45,6 +46,7 @@ export default class AgentDashboardPlugin extends Plugin {
 	private projectTracker!: ProjectTracker;
 	private taskCoordinator?: TaskCoordinator;
 	private autoReportInFlight = false;
+	private autoProjectCheckInterval: number | null = null;
 	private secretFile?: ObsidianSecretFile;
 	private secrets: Secrets = EMPTY_SECRETS;
 
@@ -83,10 +85,9 @@ export default class AgentDashboardPlugin extends Plugin {
 		);
 		this.projectTracker = new ProjectTracker(
 			new CacheStore(this.app.vault),
-			this.settings.projectTracker.githubToken,
-			this.settings.projectTracker.repos,
+			this.settings.projectTracker,
 		);
-		const projectReport = new ProjectReportService(model);
+		const projectReport = new ProjectReportService(model, this.app, runtime.workbenchWrite);
 		const visionService = new VisionService(this.app, model, runtime.workbenchWrite);
 		const researchService = new ResearchService(runtime.workbenchWrite);
 		const memoryPublish = new MemoryPublishService(this.app, runtime.auditSink);
@@ -133,10 +134,12 @@ export default class AgentDashboardPlugin extends Plugin {
 				patrolService,
 				chatService,
 				runtime.workbenchWrite,
+				() => { new ProjectTrackerSettingsModal(this.app, this).open(); },
 			),
 		);
 
 		this.setupAutoProjectReport(this.projectTracker, projectReport, runtime.workbenchWrite);
+		this.setupAutoProjectCheck(this.projectTracker);
 
 		/* 过滤插件自身缓存目录（dashboard/），避免缓存写入触发无限刷新循环。 */
 		const isPluginCachePath = (path: string): boolean => path.startsWith('dashboard/');
@@ -218,6 +221,30 @@ export default class AgentDashboardPlugin extends Plugin {
 	 * Generates the daily project report once per day at/after 08:00 when the
 	 * auto-report setting is enabled and no report for today exists yet.
 	 */
+	/** Polls tracked projects on the configured interval so the board has fresh baselines. */
+	private setupAutoProjectCheck(projectTracker: ProjectTracker): void {
+		this.clearAutoProjectCheck();
+		const minutes = this.settings.projectTracker.autoCheckMinutes;
+		if (!Number.isFinite(minutes) || minutes <= 0) return;
+		let inFlight = false;
+		const run = (): void => {
+			if (inFlight) return;
+			inFlight = true;
+			void projectTracker.checkAll(true)
+				.catch(() => undefined)
+				.finally(() => { inFlight = false; });
+		};
+		this.autoProjectCheckInterval = window.setInterval(run, minutes * 60_000);
+		run();
+	}
+
+	private clearAutoProjectCheck(): void {
+		if (this.autoProjectCheckInterval !== null) {
+			window.clearInterval(this.autoProjectCheckInterval);
+			this.autoProjectCheckInterval = null;
+		}
+	}
+
 	private setupAutoProjectReport(
 		projectTracker: ProjectTracker,
 		projectReport: ProjectReportService,
@@ -248,15 +275,14 @@ export default class AgentDashboardPlugin extends Plugin {
 				try {
 					const due = await shouldRun();
 					if (!due) return;
-					const repos = this.settings.projectTracker.repos;
-					const snapshots = await Promise.all(repos.map((repo) => projectTracker.refresh(repo, true)));
+					const results = await projectTracker.checkAll(true);
 					const parts: string[] = [];
-					for (const snapshot of snapshots) {
-						const result = await projectReport.generateReport(snapshot, createRequestContext('background-task'));
+					for (const item of results) {
+						const result = await projectReport.generateReport(item.snapshot, createRequestContext('background-task'));
 						if (result.report) {
-							parts.push('# ' + snapshot.fullName + '\n\n' + result.report);
+							parts.push('# ' + item.snapshot.fullName + '\n\n' + result.report);
 						} else if (result.error) {
-							parts.push('# ' + snapshot.fullName + '\n\n> ' + result.error);
+							parts.push('# ' + item.snapshot.fullName + '\n\n> ' + result.error);
 						}
 					}
 					if (parts.length > 0) {
@@ -297,6 +323,7 @@ export default class AgentDashboardPlugin extends Plugin {
 
 	onunload(): void {
 		this.taskCoordinator?.dispose();
+		this.clearAutoProjectCheck();
 	}
 
 	async loadSettings(): Promise<void> {
@@ -304,7 +331,7 @@ export default class AgentDashboardPlugin extends Plugin {
 		const s = stored ?? {};
 		let settings: AgentDashboardSettings = {
 			agent: { ...DEFAULT_SETTINGS.agent, ...(s.agent ?? {}) },
-			projectTracker: { ...DEFAULT_SETTINGS.projectTracker, ...(s.projectTracker ?? {}) },
+			projectTracker: normalizeProjectTrackerSettings(s.projectTracker),
 			featureFlags: {
 				...DEFAULT_SETTINGS.featureFlags,
 				...(s.featureFlags ?? {}),
@@ -329,11 +356,17 @@ export default class AgentDashboardPlugin extends Plugin {
 		this.secrets = {
 			agentApiKey: this.settings.agent.apiKey,
 			githubToken: this.settings.projectTracker.githubToken,
+			githubTokens: Object.fromEntries(
+				this.settings.projectTracker.projects
+					.filter((project) => project.token)
+					.map((project) => [project.repo, project.token ?? '']),
+			),
 		};
 		await this.saveData(stripSecrets(this.settings));
 		if (this.secretFile) await this.secretFile.write(this.secrets);
-		this.projectTracker?.setRepos(this.settings.projectTracker.repos);
-		this.projectTracker?.setToken(this.settings.projectTracker.githubToken);
+		this.projectTracker?.setSettings(this.settings.projectTracker);
+		this.setupAutoProjectCheck(this.projectTracker);
+		this.refreshDashboardViews();
 	}
 
 	private refreshDashboardViews(forceFeeds = false): void {

@@ -3,9 +3,11 @@ import type { AgentDashboardSettings } from '../settings.ts';
 export interface Secrets {
 	agentApiKey: string;
 	githubToken: string;
+	/** Per-repository GitHub tokens, keyed by "owner/repo". */
+	githubTokens: Record<string, string>;
 }
 
-export const EMPTY_SECRETS: Secrets = { agentApiKey: '', githubToken: '' };
+export const EMPTY_SECRETS: Secrets = { agentApiKey: '', githubToken: '', githubTokens: {} };
 
 export interface SecretStore {
 	read(): Promise<Secrets | null>;
@@ -17,16 +19,28 @@ export function stripSecrets(settings: AgentDashboardSettings): AgentDashboardSe
 	return {
 		...settings,
 		agent: { ...settings.agent, apiKey: '' },
-		projectTracker: { ...settings.projectTracker, githubToken: '' },
+		projectTracker: {
+			...settings.projectTracker,
+			githubToken: '',
+			projects: settings.projectTracker.projects.map((project) => ({ ...project, token: '' })),
+		},
 	};
 }
 
 /** Returns settings with secrets re-applied from the secrets file (runtime-only). */
 export function applySecrets(settings: AgentDashboardSettings, secrets: Secrets): AgentDashboardSettings {
+	const tokens = secrets.githubTokens ?? {};
 	return {
 		...settings,
 		agent: { ...settings.agent, apiKey: secrets.agentApiKey },
-		projectTracker: { ...settings.projectTracker, githubToken: secrets.githubToken },
+		projectTracker: {
+			...settings.projectTracker,
+			githubToken: secrets.githubToken,
+			projects: settings.projectTracker.projects.map((project) => ({
+				...project,
+				token: tokens[project.repo] ?? '',
+			})),
+		},
 	};
 }
 
@@ -39,13 +53,20 @@ export function migrateSecrets(
 	secrets: Secrets | null,
 ): { settings: AgentDashboardSettings; secrets: Secrets; migrated: boolean } {
 	const current = secrets ?? EMPTY_SECRETS;
-	const next = { ...current };
+	const next: Secrets = {
+		agentApiKey: current.agentApiKey ?? '',
+		githubToken: current.githubToken ?? '',
+		githubTokens: { ...(current.githubTokens ?? {}) },
+	};
 	let migrated = false;
 
 	const nextSettings = {
 		...settings,
 		agent: { ...settings.agent },
-		projectTracker: { ...settings.projectTracker },
+		projectTracker: {
+			...settings.projectTracker,
+			projects: settings.projectTracker.projects.map((project) => ({ ...project })),
+		},
 	};
 
 	if (!next.agentApiKey && settings.agent.apiKey) {
@@ -57,6 +78,13 @@ export function migrateSecrets(
 		next.githubToken = settings.projectTracker.githubToken;
 		nextSettings.projectTracker.githubToken = '';
 		migrated = true;
+	}
+	for (const project of nextSettings.projectTracker.projects) {
+		if (project.token && !next.githubTokens[project.repo]) {
+			next.githubTokens[project.repo] = project.token;
+			project.token = '';
+			migrated = true;
+		}
 	}
 
 	return { settings: nextSettings, secrets: next, migrated };

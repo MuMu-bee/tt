@@ -2,7 +2,7 @@
 
 Obsidian 插件，为知识库提供只读索引、关键词优先搜索、整理计划 Proposal/Approval/Audit 基础安全写入链路和持久化恢复能力。
 
-> **当前状态快照（2026-08-17）**：`main` 当前 HEAD 为 `edbb9b2`（PR #2 已合并）。`npm test` 当前为 101/101；`npm run build` 和 TypeScript 检查通过；真实 Obsidian 桌面 smoke test 尚未执行。最新 Release `0.1.0` 的 tag 为 `3f7ffc2`，早于当前 `main`。
+> **当前状态快照（2026-08-19）**：`main` 当前 HEAD 为 `edbb9b2` 之后包含「GitHub 项目追踪」模块增强；`npm test` 当前为 141/141；`npm run build` 通过；`npm run lint` 0 error（存在既有 warning）；真实 Obsidian 桌面 smoke test 尚未执行。最新 Release `0.1.0` 的 tag 为 `3f7ffc2`，早于当前 `main`。
 >
 > 本 README 只描述当前实现摘要。历史基线和目标设计文档不等同于当前状态，详见 [`AGENT-HANDOFF-PROMPT.md`](docs/inkmemory/AGENT-HANDOFF-PROMPT.md)。
 
@@ -53,6 +53,15 @@ OrganizePlan
 - degraded 状态阻断审批和写入，但 Dashboard 和搜索仍可用
 - 重启恢复不会自动 apply
 - **持久化现状**：Proposal/Approval 为 Vault 内 JSONL 单端；Audit 具备 Vault + 插件数据目录镜像路径。正常审计失败路径会标记为 `pending-compensation` 并提供重试入口，但镜像恢复、失败重试保留 pending 和同文件并发写仍是已知缺口
+
+### GitHub 项目追踪（看板模块）
+
+- 按优先级分组（默认 01 高优先 / 02 常规 / 03 低优先 / 04 备选池）展示关注仓库。
+- 卡片展示：项目名、`vs <上一版本>` 中文 AI 摘要、Star 数、迷你星折线、最新版本、NEW 折叠块、更新日期、详细原文入口。
+- 增量识别：使用基线（`lastSeenAt`、`knownReleaseTags`、`seenCommits`、`seenIssues`、`starHistory`）对比本次检查结果；失败请求不会推进基线。
+- 状态 Tab（全部 / 有更新 / 久未检查 / 已暂停）、搜索、系列筛选、合并周报开关。
+- 笔记沉淀：每项目 `Projects/<owner>-<repo>.md` 变更日志 + `Projects/项目追踪索引.md` 全局索引，经 `WorkbenchWriteService` 写入。
+- 设置：项目追踪页工具栏「设置」打开专用 Modal，包含 AI 摘要模型、GitHub Token、自动检查频率、优先级分组、项目启停/系列/独立 Token。
 
 ## 安全边界
 

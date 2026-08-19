@@ -195,17 +195,161 @@ export interface RepoSnapshot {
 	error?: string;
 }
 
-export interface ProjectTrackerSettings {
-	/** GitHub repos tracked, e.g. "HKUDS/DeepTutor" */
-	repos: string[];
-	/** Optional GitHub personal access token (kept local, never committed) */
-	githubToken: string;
-	/** Generate a daily Chinese report at 08:00 when enabled */
-	autoReport: boolean;
+export type ProjectDotColor = 'red' | 'orange' | 'blue' | 'purple' | 'green' | 'muted';
+
+export interface ProjectGroup {
+	id: string;
+	name: string;
+	dotColor: ProjectDotColor;
+	order: number;
 }
 
+export interface TrackedProject {
+	/** GitHub repository in owner/repo form. */
+	repo: string;
+	/** Group id this project belongs to. */
+	groupId: string;
+	/** Whether automatic checking is enabled for this project. */
+	enabled: boolean;
+	/** Optional user-defined series label used by the series filter. */
+	series: string;
+	/** Optional per-project GitHub token. Never persisted to data.json. */
+	token?: string;
+	/** When false, an empty per-project token means "no token" instead of falling back to the global token. */
+	useGlobalToken?: boolean;
+}
+
+export type ProjectIncrementKind = 'release' | 'commit' | 'issue';
+
+export interface ProjectIncrementItem {
+	kind: ProjectIncrementKind;
+	title: string;
+	detail: string;
+	date: string;
+	url: string;
+}
+
+export interface StarPoint {
+	date: string;
+	stars: number;
+}
+
+export interface ProjectBaseline {
+	lastSeenAt: string;
+	knownReleaseTags: string[];
+	seenCommits: string[];
+	seenIssues: string[];
+	starHistory: StarPoint[];
+}
+
+export interface ProjectTrackerSettings {
+	projects: TrackedProject[];
+	groups: ProjectGroup[];
+	/** Global GitHub personal access token (kept in secrets.json, never data.json). */
+	githubToken: string;
+	/** Generate a daily Chinese report at 08:00 when enabled. */
+	autoReport: boolean;
+	/** Automatic check interval in minutes. 0 disables polling; checks still run manually. */
+	autoCheckMinutes: number;
+	/** Number of days without new activity before a project counts as stale. */
+	staleAfterDays: number;
+	/** Vault folder for per-project changelogs and the global index note. */
+	noteFolder: string;
+}
+
+export const DEFAULT_PROJECT_GROUPS: ProjectGroup[] = [
+	{ id: 'p1', name: '01 高优先 · 每天看', dotColor: 'red', order: 1 },
+	{ id: 'p2', name: '02 常规 · 每周看', dotColor: 'orange', order: 2 },
+	{ id: 'p3', name: '03 低优先 · 偶尔看', dotColor: 'blue', order: 3 },
+	{ id: 'p4', name: '04 备选池 · 待定', dotColor: 'muted', order: 4 },
+];
+
+export const DEFAULT_TRACKED_PROJECTS: TrackedProject[] = [
+	{ repo: 'HKUDS/DeepTutor', groupId: 'p1', enabled: true, series: '' },
+];
+
 export const DEFAULT_PROJECT_TRACKER_SETTINGS: ProjectTrackerSettings = {
-	repos: ['HKUDS/DeepTutor'],
+	projects: DEFAULT_TRACKED_PROJECTS.map((project) => ({ ...project })),
+	groups: DEFAULT_PROJECT_GROUPS.map((group) => ({ ...group })),
 	githubToken: '',
 	autoReport: true,
+	autoCheckMinutes: 60,
+	staleAfterDays: 7,
+	noteFolder: 'Projects',
 };
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
+function asString(value: unknown, fallback = ''): string {
+	return typeof value === 'string' ? value : fallback;
+}
+
+function asNumber(value: unknown, fallback: number): number {
+	return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
+}
+
+function isProjectDotColor(value: unknown): value is ProjectDotColor {
+	return value === 'red' || value === 'orange' || value === 'blue' || value === 'purple' || value === 'green' || value === 'muted';
+}
+
+function normalizeGroups(raw: unknown): ProjectGroup[] {
+	if (!Array.isArray(raw) || raw.length === 0) {
+		return DEFAULT_PROJECT_GROUPS.map((group) => ({ ...group }));
+	}
+	const groups = raw.flatMap((item) => {
+		if (!isRecord(item) || !asString(item.id)) return [];
+		return [{
+			id: asString(item.id),
+			name: asString(item.name, asString(item.id)),
+			dotColor: isProjectDotColor(item.dotColor) ? item.dotColor : 'muted',
+			order: asNumber(item.order, 0),
+		}];
+	});
+	return groups.length > 0 ? groups : DEFAULT_PROJECT_GROUPS.map((group) => ({ ...group }));
+}
+
+function normalizeProjects(raw: unknown, groupIds: string[]): TrackedProject[] {
+	if (!Array.isArray(raw)) {
+		return DEFAULT_TRACKED_PROJECTS.map((project) => ({ ...project, groupId: groupIds[0] ?? project.groupId }));
+	}
+	return raw.flatMap((item) => {
+		if (!isRecord(item) || !asString(item.repo)) return [];
+		return [{
+			repo: asString(item.repo),
+			groupId: asString(item.groupId, groupIds[0] ?? 'p1'),
+			enabled: typeof item.enabled === 'boolean' ? item.enabled : true,
+			series: asString(item.series),
+			token: asString(item.token),
+			useGlobalToken: typeof item.useGlobalToken === 'boolean' ? item.useGlobalToken : true,
+		}];
+	});
+}
+
+/**
+ * Normalizes stored project-tracker settings into the current shape.
+ * Migrates the legacy `repos: string[]` field into the canonical `projects` list.
+ */
+export function normalizeProjectTrackerSettings(
+	raw: (Partial<ProjectTrackerSettings> & { repos?: string[] }) | null | undefined,
+): ProjectTrackerSettings {
+	const base = raw ?? {};
+	const groups = normalizeGroups(base.groups);
+	const groupIds = groups.map((group) => group.id);
+	const legacyRepos = Array.isArray(base.repos) ? base.repos.filter((repo): repo is string => typeof repo === 'string') : [];
+	const projects = Array.isArray(base.projects)
+		? normalizeProjects(base.projects, groupIds)
+		: legacyRepos.length > 0
+			? legacyRepos.map((repo) => ({ repo, groupId: groupIds[0] ?? 'p1', enabled: true, series: '', token: '', useGlobalToken: true }))
+			: DEFAULT_TRACKED_PROJECTS.map((project) => ({ ...project, groupId: groupIds[0] ?? project.groupId }));
+	return {
+		projects: projects.map((project) => ({ ...project, groupId: groupIds.includes(project.groupId) ? project.groupId : (groupIds[0] ?? 'p1') })),
+		groups: groups.map((group) => ({ ...group })),
+		githubToken: asString(base.githubToken),
+		autoReport: typeof base.autoReport === 'boolean' ? base.autoReport : true,
+		autoCheckMinutes: asNumber(base.autoCheckMinutes, 60),
+		staleAfterDays: asNumber(base.staleAfterDays, 7),
+		noteFolder: asString(base.noteFolder, 'Projects'),
+	};
+}

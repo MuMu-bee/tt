@@ -6,7 +6,7 @@ import type { AgentDashboardSettings } from '../src/settings.ts';
 function makeSettings(apiKey: string, githubToken: string): AgentDashboardSettings {
 	return {
 		agent: { baseUrl: '', apiKey, model: '', ollamaUrl: '', ollamaModel: '', ollamaEmbeddingModel: '', visionModel: '', useLocal: false, maxContextTokens: 4000 },
-		projectTracker: { repos: [], githubToken, autoReport: false },
+		projectTracker: { projects: [], groups: [], githubToken, autoReport: false, autoCheckMinutes: 60, staleAfterDays: 7, noteFolder: 'Projects' },
 		featureFlags: {
 			semantic_search: false,
 			semantic_fallback: false,
@@ -29,7 +29,7 @@ test('stripSecrets removes api key and github token from settings', () => {
 
 test('applySecrets restores secrets into settings', () => {
 	const settings = makeSettings('', '');
-	const applied = applySecrets(settings, { agentApiKey: 'sk-key', githubToken: 'gh-token' });
+	const applied = applySecrets(settings, { agentApiKey: 'sk-key', githubToken: 'gh-token', githubTokens: {} });
 	assert.equal(applied.agent.apiKey, 'sk-key');
 	assert.equal(applied.projectTracker.githubToken, 'gh-token');
 });
@@ -46,8 +46,17 @@ test('migrateSecrets copies legacy data.json keys and clears them', () => {
 
 test('migrateSecrets never overwrites an existing secrets file', () => {
 	const settings = makeSettings('new-key', 'new-token');
-	const result = migrateSecrets(settings, { agentApiKey: 'file-key', githubToken: 'file-token' });
+	const result = migrateSecrets(settings, { agentApiKey: 'file-key', githubToken: 'file-token', githubTokens: {} });
 	assert.equal(result.migrated, false);
 	assert.equal(result.secrets.agentApiKey, 'file-key');
 	assert.equal(result.settings.agent.apiKey, 'new-key');
+});
+
+test('migrateSecrets moves per-project tokens into githubTokens', () => {
+	const settings = makeSettings('', '');
+	settings.projectTracker.projects = [{ repo: 'a/b', groupId: 'p1', enabled: true, series: '', token: 'repo-token' }];
+	const result = migrateSecrets(settings, EMPTY_SECRETS);
+	assert.equal(result.migrated, true);
+	assert.equal(result.secrets.githubTokens['a/b'], 'repo-token');
+	assert.equal(result.settings.projectTracker.projects[0]?.token, '');
 });

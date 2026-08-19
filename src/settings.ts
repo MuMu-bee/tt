@@ -1,8 +1,8 @@
 import { Notice, PluginSettingTab, Setting, TextComponent } from 'obsidian';
 import type { App } from 'obsidian';
 import type AgentDashboardPlugin from './main';
-import type { AgentConfig, ProjectTrackerSettings } from './data/dashboardTypes';
-import { DEFAULT_AGENT_CONFIG, DEFAULT_PROJECT_TRACKER_SETTINGS } from './data/dashboardTypes';
+import type { AgentConfig, ProjectDotColor, ProjectGroup, ProjectTrackerSettings, TrackedProject } from './data/dashboardTypes';
+import { DEFAULT_AGENT_CONFIG, DEFAULT_PROJECT_TRACKER_SETTINGS, normalizeProjectTrackerSettings } from './data/dashboardTypes';
 import { OpenAiModel } from './adapters/openAiModel';
 import { createRequestContext } from './application/requestContext';
 import { parseRepoFullName } from './application/githubTracker';
@@ -19,10 +19,12 @@ export interface AgentDashboardSettings {
 export const DEFAULT_SETTINGS: AgentDashboardSettings = {
 	agent: { ...DEFAULT_AGENT_CONFIG },
 	featureFlags: { ...DEFAULT_FEATURE_FLAGS, organize: { ...DEFAULT_FEATURE_FLAGS.organize } },
-	projectTracker: { ...DEFAULT_PROJECT_TRACKER_SETTINGS },
+	projectTracker: normalizeProjectTrackerSettings(DEFAULT_PROJECT_TRACKER_SETTINGS),
 };
 
 export class AgentDashboardSettingTab extends PluginSettingTab {
+	private saveTimer: number | null = null;
+
 	constructor(
 		app: App,
 		private readonly plugin: AgentDashboardPlugin,
@@ -176,7 +178,7 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 
 		new Setting(containerEl)
 			.setName('GitHub Token')
-			.setDesc('可选的 GitHub 个人访问令牌（只读即可），用于提高获取频率限制。保存在 secrets.json（权限 0600）。')
+			.setDesc('全局只读令牌，用于提高 API 频率限制。私有仓库可在下方按项目单独填写。保存在 secrets.json（权限 0600）。')
 			.addText((text) => {
 				text.inputEl.type = 'password';
 				text
@@ -187,6 +189,45 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					});
 			});
+
+		new Setting(containerEl)
+			.setName('自动检查频率')
+			.setDesc('项目追踪看板的自动检查间隔。关闭后仍可手动点击「刷新」。')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ '0': '关闭自动检查', '30': '每 30 分钟', '60': '每 60 分钟', '180': '每 3 小时', '1440': '每天' })
+					.setValue(String(this.plugin.settings.projectTracker.autoCheckMinutes))
+					.onChange(async (value) => {
+						this.plugin.settings.projectTracker.autoCheckMinutes = Number(value);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('久未检查阈值')
+			.setDesc('距上次检查超过该天数的项目会进入「久未检查」状态。')
+			.addDropdown((dropdown) =>
+				dropdown
+					.addOptions({ '3': '3 天', '7': '7 天', '14': '14 天', '30': '30 天' })
+					.setValue(String(this.plugin.settings.projectTracker.staleAfterDays))
+					.onChange(async (value) => {
+						this.plugin.settings.projectTracker.staleAfterDays = Number(value);
+						await this.plugin.saveSettings();
+					}),
+			);
+
+		new Setting(containerEl)
+			.setName('笔记沉淀目录')
+			.setDesc('每项目变更日志与全局索引写入的 Vault 目录，默认 Projects。')
+			.addText((text) =>
+				text
+					.setPlaceholder('Projects')
+					.setValue(this.plugin.settings.projectTracker.noteFolder)
+					.onChange(async (value) => {
+						this.plugin.settings.projectTracker.noteFolder = value.trim() || 'Projects';
+						await this.plugin.saveSettings();
+					}),
+			);
 
 		new Setting(containerEl)
 			.setName('每日自动生成报告')
@@ -201,25 +242,16 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl)
-			.setName('关注的项目')
-			.setDesc('格式为 所有者/仓库名，如 HKUDS/DeepTutor。')
+			.setName('优先级分组')
+			.setDesc('看板按分组顺序展示。可改名、改颜色、增删分组。')
 			.setHeading();
+		this.renderProjectGroups(containerEl);
 
-		const repos = this.plugin.settings.projectTracker.repos;
-		repos.forEach((repo, index) => {
-			new Setting(containerEl)
-				.setName(repo)
-				.addButton((button) =>
-					button
-						.setButtonText('删除')
-						.setWarning()
-						.onClick(async () => {
-							this.plugin.settings.projectTracker.repos.splice(index, 1);
-							await this.plugin.saveSettings();
-							this.display();
-						}),
-				);
-		});
+		new Setting(containerEl)
+			.setName('关注的项目')
+			.setDesc('格式为 所有者/仓库名，如 HKUDS/DeepTutor。可设优先级、系列、启停与独立 Token。')
+			.setHeading();
+		this.renderProjectList(containerEl);
 
 		let repoInput: TextComponent | null = null;
 		new Setting(containerEl)
@@ -232,18 +264,16 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 					.setButtonText('添加')
 					.onClick(async () => {
 						const value = repoInput?.getValue().trim() ?? '';
-						if (!value) {
-							return;
-						}
+						if (!value) return;
 						try {
 							parseRepoFullName(value);
 						} catch (error) {
 							new Notice(error instanceof Error ? error.message : '仓库格式不正确');
 							return;
 						}
-						const repos = this.plugin.settings.projectTracker.repos;
-						if (!repos.includes(value)) {
-							repos.push(value);
+						const projects = this.plugin.settings.projectTracker.projects;
+						if (!projects.some((project) => project.repo === value)) {
+							projects.push({ repo: value, groupId: this.firstGroupId(), enabled: true, series: '', token: '', useGlobalToken: true });
 							await this.plugin.saveSettings();
 						}
 						this.display();
@@ -402,5 +432,166 @@ export class AgentDashboardSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			);
+	}
+
+	private scheduleSave(): void {
+		if (this.saveTimer !== null) {
+			window.clearTimeout(this.saveTimer);
+		}
+		this.saveTimer = window.setTimeout(() => {
+			this.saveTimer = null;
+			void this.plugin.saveSettings();
+		}, 350);
+	}
+
+	private flushSave(): void {
+		if (this.saveTimer !== null) {
+			window.clearTimeout(this.saveTimer);
+			this.saveTimer = null;
+		}
+		void this.plugin.saveSettings();
+	}
+
+	private groupOptions(): Record<string, string> {
+		return Object.fromEntries(this.plugin.settings.projectTracker.groups.map((group) => [group.id, group.name]));
+	}
+
+	private colorOptions(): Record<string, string> {
+		return { red: '红', orange: '橙', blue: '蓝', purple: '紫', green: '绿', muted: '灰' };
+	}
+
+	private firstGroupId(): string {
+		return this.plugin.settings.projectTracker.groups[0]?.id ?? 'p1';
+	}
+
+	private nextGroupOrder(): number {
+		const orders = this.plugin.settings.projectTracker.groups.map((group) => group.order);
+		return Math.max(0, ...orders) + 1;
+	}
+
+	private renderProjectGroups(containerEl: HTMLElement): void {
+		const groups = this.plugin.settings.projectTracker.groups;
+		groups.forEach((group: ProjectGroup, index: number) => {
+			const setting = new Setting(containerEl);
+			setting.setName('分组 ' + String(index + 1));
+			setting.setDesc('名称与颜色；删除分组时其项目会回到第一个分组。');
+			const row = setting.controlEl.createDiv({ cls: 'agent-dashboard-project-setting-row' });
+			const nameInput = row.createEl('input', { attr: { type: 'text', 'aria-label': '分组名称' } });
+			nameInput.value = group.name;
+			nameInput.addEventListener('input', () => {
+				group.name = nameInput.value.trim() || group.name;
+				this.scheduleSave();
+			});
+			const color = row.createEl('select', { attr: { 'aria-label': '分组颜色' } });
+			Object.entries(this.colorOptions()).forEach(([value, label]) => color.createEl('option', { attr: { value }, text: label }));
+			color.value = group.dotColor;
+			color.addEventListener('change', () => {
+				group.dotColor = color.value as ProjectDotColor;
+				void this.plugin.saveSettings();
+			});
+			const remove = row.createEl('button', { text: '删除', attr: { type: 'button' } });
+			remove.addEventListener('click', () => {
+				if (groups.length <= 1) {
+					new Notice('至少保留一个优先级分组。');
+					return;
+				}
+				const removedId = group.id;
+				this.plugin.settings.projectTracker.groups.splice(index, 1);
+				this.plugin.settings.projectTracker.projects.forEach((project) => {
+					if (project.groupId === removedId) project.groupId = this.firstGroupId();
+				});
+				void (async () => {
+					await this.plugin.saveSettings();
+					this.display();
+				})();
+			});
+		});
+
+		let newNameInput: HTMLInputElement | null = null;
+		let newColor: HTMLSelectElement | null = null;
+		const addSetting = new Setting(containerEl);
+		addSetting.setName('新增分组');
+		addSetting.setDesc('新分组会追加到看板末尾。');
+		const addRow = addSetting.controlEl.createDiv({ cls: 'agent-dashboard-project-setting-row' });
+		newNameInput = addRow.createEl('input', { attr: { type: 'text', placeholder: '分组名称' } });
+		newColor = addRow.createEl('select', { attr: { 'aria-label': '分组颜色' } });
+		Object.entries(this.colorOptions()).forEach(([value, label]) => newColor?.createEl('option', { attr: { value }, text: label }));
+		const addButton = addRow.createEl('button', { text: '添加', attr: { type: 'button' } });
+		addButton.addEventListener('click', () => {
+			const name = newNameInput?.value.trim() || '新分组';
+			this.plugin.settings.projectTracker.groups.push({
+				id: 'g' + Date.now(),
+				name,
+				dotColor: (newColor?.value as ProjectDotColor) ?? 'muted',
+				order: this.nextGroupOrder(),
+			});
+			void (async () => {
+				await this.plugin.saveSettings();
+				this.display();
+			})();
+		});
+	}
+
+	private renderProjectList(containerEl: HTMLElement): void {
+		const projects = this.plugin.settings.projectTracker.projects;
+		const groups = this.plugin.settings.projectTracker.groups;
+		projects.forEach((project: TrackedProject, index: number) => {
+			const setting = new Setting(containerEl);
+			setting.setName(project.repo);
+			setting.setDesc('优先级分组、系列标签、启停与独立 Token。');
+			const row = setting.controlEl.createDiv({ cls: 'agent-dashboard-project-setting-row agent-dashboard-project-setting-row--wrap' });
+
+			const group = row.createEl('select', { attr: { 'aria-label': '优先级分组' } });
+			groups.forEach((candidate) => group.createEl('option', { attr: { value: candidate.id }, text: candidate.name }));
+			group.value = project.groupId;
+			group.addEventListener('change', () => {
+				project.groupId = group.value;
+				void this.plugin.saveSettings();
+			});
+
+			const enabled = row.createEl('label', { cls: 'agent-dashboard-inline-toggle' });
+			const checkbox = enabled.createEl('input', { attr: { type: 'checkbox' } });
+			checkbox.checked = project.enabled;
+			enabled.createSpan({ text: '启用' });
+			checkbox.addEventListener('change', () => {
+				project.enabled = checkbox.checked;
+				void this.plugin.saveSettings();
+			});
+
+			const series = row.createEl('input', { attr: { type: 'text', 'aria-label': '系列', placeholder: '系列' } });
+			series.value = project.series;
+			series.addEventListener('input', () => {
+				project.series = series.value.trim();
+				this.scheduleSave();
+			});
+
+			const token = row.createEl('input', { attr: { type: 'password', 'aria-label': '独立 Token', placeholder: '独立 Token' } });
+			token.value = project.token ?? '';
+			token.addEventListener('input', () => {
+				project.token = token.value.trim();
+				this.scheduleSave();
+			});
+			token.addEventListener('blur', () => {
+				this.flushSave();
+			});
+
+			const noGlobal = row.createEl('label', { cls: 'agent-dashboard-inline-toggle' });
+			const noGlobalCheckbox = noGlobal.createEl('input', { attr: { type: 'checkbox' } });
+			noGlobalCheckbox.checked = project.useGlobalToken === false;
+			noGlobal.createSpan({ text: '忽略全局 Token' });
+			noGlobalCheckbox.addEventListener('change', () => {
+				project.useGlobalToken = !noGlobalCheckbox.checked;
+				void this.plugin.saveSettings();
+			});
+
+			const remove = row.createEl('button', { text: '删除', attr: { type: 'button' } });
+			remove.addEventListener('click', () => {
+				projects.splice(index, 1);
+				void (async () => {
+					await this.plugin.saveSettings();
+					this.display();
+				})();
+			});
+		});
 	}
 }

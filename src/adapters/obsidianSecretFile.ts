@@ -2,6 +2,10 @@ import { promises as fs } from 'node:fs';
 import { join } from 'node:path';
 import type { Secrets, SecretStore } from '../services/secretService.ts';
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+	return typeof value === 'object' && value !== null;
+}
+
 /** Node-backed secrets file. The plugin directory is local and owned by the user. */
 export class ObsidianSecretFile implements SecretStore {
 	private readonly filePath: string;
@@ -16,9 +20,16 @@ export class ObsidianSecretFile implements SecretStore {
 			const value: unknown = JSON.parse(raw);
 			if (typeof value !== 'object' || value === null) return null;
 			const record = value as Record<string, unknown>;
+			const githubTokens: Record<string, string> = {};
+			if (isRecord(record.githubTokens)) {
+				for (const [key, value] of Object.entries(record.githubTokens)) {
+					if (typeof value === 'string') githubTokens[key] = value;
+				}
+			}
 			return {
 				agentApiKey: typeof record.agentApiKey === 'string' ? record.agentApiKey : '',
 				githubToken: typeof record.githubToken === 'string' ? record.githubToken : '',
+				githubTokens,
 			};
 		} catch {
 			return null;

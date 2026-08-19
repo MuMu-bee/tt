@@ -25,7 +25,7 @@ import { createRequestContext, type RequestContext } from '../application/reques
 import { SearchService } from '../services/searchService';
 import { renderGraphCanvas } from './graphCanvas';
 import { renderChatPage } from './chatPage';
-import { renderProjectTracker, generateProjectReport, type ProjectPageHost } from './projectPage';
+import { renderProjectTracker, generateProjectReport, type ProjectPageHost, type ProjectBoardState, DEFAULT_PROJECT_BOARD_STATE } from './projectPage';
 import { renderWorkbench, type WorkbenchPageHost } from './workbenchPage';
 import type { AuditRecord, Proposal, SearchResult } from '../application/contracts';
 import type { PersistenceRuntimeStatus } from '../application/persistenceContracts';
@@ -130,11 +130,13 @@ private liveLabelEl: HTMLSpanElement | null = null;
 		private readonly patrolService: PatrolService;
 		private readonly chatService?: ChatService;
 		private readonly workbenchWrite: WorkbenchWriteService;
+		private readonly openProjectSettings: () => void;
 
 	private workbenchStatusEl: HTMLElement | null = null;
 	private projectListEl: HTMLElement | null = null;
 	private projectSnapshots: RepoSnapshot[] | null = null;
 	private projectTrackerBusy = false;
+	private projectBoardState: ProjectBoardState = { ...DEFAULT_PROJECT_BOARD_STATE };
 	private persistenceBannerEl: HTMLElement | null = null;
 	private workbenchErrorEl: HTMLElement | null = null;
 	private proposalListEl: HTMLElement | null = null;
@@ -166,6 +168,7 @@ constructor(
 			patrolService: PatrolService,
 			chatService: ChatService | undefined,
 			workbenchWrite: WorkbenchWriteService,
+			openProjectSettings: () => void,
 		) {
 			super(leaf);
 			this.dashboard = dashboard;
@@ -186,6 +189,7 @@ constructor(
 			this.patrolService = patrolService;
 			this.chatService = chatService;
 			this.workbenchWrite = workbenchWrite;
+			this.openProjectSettings = openProjectSettings;
 		}
 
 	getViewType(): string {
@@ -1414,6 +1418,7 @@ this.registerDomEvent(button, 'click', () => {
 			projectTracker: this.projectTracker,
 			projectReport: this.projectReport,
 			workbenchWrite: this.workbenchWrite,
+			boardState: this.projectBoardState,
 			get projectListEl() { return projectState.projectListEl; },
 			set projectListEl(value) { projectState.projectListEl = value; },
 			get projectTrackerBusy() { return projectState.projectTrackerBusy; },
@@ -1424,6 +1429,10 @@ this.registerDomEvent(button, 'click', () => {
 			},
 			setFeedback: (message) => this.setFeedback(message),
 			openNote: (path) => this.openNote(path),
+			hasNote: (path) => this.app.vault.getAbstractFileByPath(path) instanceof TFile,
+			openSettings: () => {
+				this.openProjectSettings();
+			},
 			formatDate: (date) => this.formatDate(date),
 			openExternal: (url) => {
 				const win = this.containerEl.ownerDocument.defaultView;

@@ -1,0 +1,611 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>项目追踪 · GitHub Project Tracker</title>
+<style>
+  :root {
+    --bg: #fafafa;
+    --surface: #ffffff;
+    --border: #ececf2;
+    --text: #1a1a1f;
+    --muted: #8a8a93;
+    --new: #2da876;
+    --new-soft: #ecf8f1;
+    --accent: #7c5cff;
+    --accent-soft: #f1edff;
+    --warn: #f59e0b;
+    --info: #3b82f6;
+    --danger: #ef4444;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    line-height: 1.5;
+  }
+
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 28px 24px 96px;
+  }
+
+  /* ===== 顶部工具栏 ===== */
+  .toolbar {
+    height: 64px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 18px;
+    padding: 0 14px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    position: sticky;
+    top: 16px;
+    z-index: 10;
+  }
+
+  .tabs {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .tabs input { position: absolute; opacity: 0; pointer-events: none; }
+
+  .tab {
+    padding: 6px 14px;
+    border-radius: 8px;
+    color: var(--muted);
+    background: var(--surface);
+    font-size: 13px;
+    font-weight: 400;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+
+  .tabs input:checked + .tab {
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .switch-box {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .switch-box input { display: none; }
+
+  .track {
+    position: relative;
+    display: inline-block;
+    width: 48px;
+    height: 24px;
+    border-radius: 999px;
+    background: #e9e9ef;
+    transition: background .18s ease;
+  }
+
+  .thumb {
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #ffffff;
+    box-shadow: 0 1px 3px rgba(0,0,0,.18);
+    transition: transform .18s ease;
+  }
+
+  .switch-box input:checked + .track { background: var(--accent); }
+  .switch-box input:checked + .track .thumb { transform: translateX(24px); }
+
+  .select {
+    height: 34px;
+    padding: 0 28px 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 13px;
+    outline: none;
+  }
+
+  .search {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    width: 280px;
+    height: 34px;
+    padding: 0 10px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+
+  .search .icon { color: var(--muted); font-size: 14px; }
+  .search input {
+    border: 0;
+    outline: none;
+    background: transparent;
+    color: var(--text);
+    font-size: 13px;
+    width: 100%;
+  }
+
+  /* ===== 分组块 ===== */
+  .groups { display: flex; flex-direction: column; gap: 28px; margin-top: 22px; }
+
+  .group-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .group-title { display: flex; align-items: baseline; gap: 6px; }
+  .group-index { font-size: 56px; font-weight: 800; line-height: 1; color: var(--accent); }
+  .group-name { font-size: 28px; font-weight: 700; color: var(--text); }
+  .group-sub { font-size: 14px; font-weight: 400; color: var(--muted); margin-left: 6px; }
+  .group-meta { font-size: 13px; color: var(--muted); padding-top: 6px; white-space: nowrap; }
+  .group-meta b { color: var(--new); font-weight: 700; }
+
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+    gap: 18px;
+  }
+
+  /* ===== 卡片 ===== */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .card-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .card-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .dot { width: 8px; height: 8px; border-radius: 50%; }
+  .dot.red { background: var(--danger); }
+  .dot.orange { background: var(--warn); }
+  .dot.blue { background: var(--info); }
+  .dot.muted { background: var(--muted); }
+
+  .ep {
+    font-size: 11px;
+    letter-spacing: .08em;
+    color: var(--muted);
+  }
+
+  .card-name {
+    margin-top: 14px;
+    font-size: 20px;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.3;
+  }
+
+  .summary {
+    margin-top: 8px;
+    font-size: 14px;
+    line-height: 1.6;
+    color: var(--text);
+  }
+
+  .vs {
+    display: inline-block;
+    margin-right: 4px;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 14px;
+    font-weight: 600;
+  }
+
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-top: 14px;
+    font-size: 14px;
+    color: var(--text);
+  }
+
+  .meta svg { display: block; }
+
+  .version {
+    padding: 1px 6px;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  /* ===== NEW 块 ===== */
+  .new {
+    margin-top: 14px;
+    border: 1px dashed var(--new);
+    border-radius: 8px;
+    background: var(--new-soft);
+    overflow: hidden;
+  }
+
+  .new-check { position: absolute; opacity: 0; pointer-events: none; }
+
+  .new-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 12px;
+    cursor: pointer;
+  }
+
+  .new-pill {
+    padding: 1px 6px;
+    border-radius: 4px;
+    background: #ffffff;
+    color: var(--new);
+    font-size: 11px;
+    font-weight: 700;
+  }
+
+  .new-title { font-size: 13px; font-weight: 600; color: var(--text); }
+  .new-count { margin-left: auto; font-size: 13px; color: var(--muted); white-space: nowrap; }
+  .chev { display: inline-block; transition: transform .18s ease; }
+
+  .new-body { display: none; padding: 6px 12px 12px; }
+
+  .new-check:checked ~ .new-body { display: block; }
+  .new-check:checked ~ .new-head .chev { transform: rotate(180deg); }
+
+  .new-row {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 4px 0;
+    font-size: 13px;
+    color: var(--text);
+    line-height: 1.6;
+  }
+
+  .new-date {
+    font-size: 11px;
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    white-space: nowrap;
+  }
+
+  /* ===== 卡片底部 ===== */
+  .card-foot {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+
+  .updated { font-size: 12px; color: var(--muted); }
+  .read { font-size: 13px; color: var(--accent); text-decoration: none; }
+  .read:hover { text-decoration: underline; }
+
+  /* ===== 浮窗 / 浮条 ===== */
+  .float-search,
+  .float-dock {
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: 0 10px 30px rgba(30,30,40,.08);
+    padding: 10px 14px;
+    font-size: 13px;
+    color: var(--text);
+  }
+
+  .float-search { right: 24px; bottom: 24px; }
+  .float-dock { left: 24px; bottom: 24px; display: flex; gap: 8px; }
+  .float-dock span { color: var(--muted); }
+</style>
+</head>
+<body>
+  <main class="page">
+
+    <!-- 顶部工具栏 -->
+    <section class="toolbar">
+      <div class="tabs">
+        <input type="radio" name="status" id="tab-all" checked />
+        <label class="tab" for="tab-all">全部</label>
+
+        <input type="radio" name="status" id="tab-updates" />
+        <label class="tab" for="tab-updates">有更新</label>
+
+        <input type="radio" name="status" id="tab-stale" />
+        <label class="tab" for="tab-stale">久未检查</label>
+
+        <input type="radio" name="status" id="tab-paused" />
+        <label class="tab" for="tab-paused">已暂停</label>
+      </div>
+
+      <div class="toolbar-right">
+        <label class="switch-box">
+          <input type="checkbox" id="merge" />
+          <span class="track"><span class="thumb"></span></span>
+          <span>合并周报</span>
+        </label>
+
+        <select class="select" aria-label="系列筛选">
+          <option>全部系列 ▾</option>
+          <option>AI</option>
+          <option>开发工具</option>
+          <option>框架</option>
+        </select>
+
+        <label class="search">
+          <span class="icon">🔍</span>
+          <input type="search" placeholder="搜索项目、标签、关键字" />
+        </label>
+      </div>
+    </section>
+
+    <!-- 分组 -->
+    <section class="groups">
+
+      <!-- 01 高优先 -->
+      <section class="group">
+        <header class="group-header">
+          <div class="group-title">
+            <span class="group-index">01</span>
+            <span class="group-name">高优先</span>
+            <span class="group-sub">每天看</span>
+          </div>
+          <div class="group-meta">2 条 · 本周 <b>+3</b></div>
+        </header>
+
+        <div class="grid">
+          <!-- 卡片 1 -->
+          <article class="card">
+            <div class="card-head">
+              <div class="card-group">
+                <span class="dot red"></span>
+                <span>高优先</span>
+              </div>
+              <span class="ep">NO EP.</span>
+            </div>
+
+            <h2 class="card-name">墨忆台 Memory Workbench</h2>
+
+            <div class="summary">
+              <span class="vs">vs v0.1.0-beta</span>
+              <span>· 落地 4 层记忆架构，修复 24 个审查问题；本次无新增用户可见功能。</span>
+            </div>
+
+            <div class="meta">
+              <span>★ 26</span>
+              <svg width="56" height="18" viewBox="0 0 56 18" aria-hidden="true">
+                <polyline points="0,14 14,13 28,10 42,8 56,4" fill="none" stroke="#2da876" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="version">v0.1.0 main</span>
+            </div>
+
+            <div class="new">
+              <input class="new-check" type="checkbox" id="new-1" />
+              <label class="new-head" for="new-1">
+                <span class="new-pill">NEW</span>
+                <span class="new-title">本次新增（自 8-17 后）</span>
+                <span class="new-count">3 条 <span class="chev">▾</span></span>
+              </label>
+              <div class="new-body">
+                <div class="new-row"><span class="new-date">08-19</span><span>落地 4 层记忆架构与工程化收尾 (Phase 0-4)</span></div>
+                <div class="new-row"><span class="new-date">08-18</span><span>合并远程 14 项修复</span></div>
+                <div class="new-row"><span class="new-date">08-18</span><span>标记: 修复代码审查发现的 24 个问题</span></div>
+              </div>
+            </div>
+
+            <footer class="card-foot">
+              <span class="updated">01-17 · 更新</span>
+              <a class="read" href="#">详细原文 ↗</a>
+            </footer>
+          </article>
+
+          <!-- 卡片 2 -->
+          <article class="card">
+            <div class="card-head">
+              <div class="card-group">
+                <span class="dot red"></span>
+                <span>高优先</span>
+              </div>
+              <span class="ep">NO EP.</span>
+            </div>
+
+            <h2 class="card-name">DeepTutor</h2>
+
+            <div class="summary">
+              <span class="vs">vs v0.2.2</span>
+              <span>· 新增多轮数学推理，支持中英混合提示词；修复推理服务内存泄漏。</span>
+            </div>
+
+            <div class="meta">
+              <span>★ 1420</span>
+              <svg width="56" height="18" viewBox="0 0 56 18" aria-hidden="true">
+                <polyline points="0,14 14,13 28,10 42,8 56,4" fill="none" stroke="#2da876" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="version">v0.2.3</span>
+            </div>
+
+            <div class="new">
+              <input class="new-check" type="checkbox" id="new-2" />
+              <label class="new-head" for="new-2">
+                <span class="new-pill">NEW</span>
+                <span class="new-title">本次新增（自 v0.2.2 后）</span>
+                <span class="new-count">3 条 <span class="chev">▾</span></span>
+              </label>
+              <div class="new-body">
+                <div class="new-row"><span class="new-date">08-15</span><span>新增多轮数学推理</span></div>
+                <div class="new-row"><span class="new-date">08-12</span><span>修复推理服务内存泄漏</span></div>
+                <div class="new-row"><span class="new-date">08-08</span><span>优化提示词兼容性</span></div>
+              </div>
+            </div>
+
+            <footer class="card-foot">
+              <span class="updated">01-16 · 更新</span>
+              <a class="read" href="#">详细原文 ↗</a>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <!-- 02 常规 -->
+      <section class="group">
+        <header class="group-header">
+          <div class="group-title">
+            <span class="group-index">02</span>
+            <span class="group-name">常规</span>
+            <span class="group-sub">每周看</span>
+          </div>
+          <div class="group-meta">1 条 · 本周 <b>+1</b></div>
+        </header>
+
+        <div class="grid">
+          <!-- 卡片 3 -->
+          <article class="card">
+            <div class="card-head">
+              <div class="card-group">
+                <span class="dot orange"></span>
+                <span>常规</span>
+              </div>
+              <span class="ep">NO EP.</span>
+            </div>
+
+            <h2 class="card-name">OpenAI Python SDK</h2>
+
+            <div class="summary">
+              <span class="vs">vs v1.63.1</span>
+              <span>· 新增结构化输出响应；修复重试逻辑中的竞态。</span>
+            </div>
+
+            <div class="meta">
+              <span>★ 24.8k</span>
+              <svg width="56" height="18" viewBox="0 0 56 18" aria-hidden="true">
+                <polyline points="0,10 14,10 28,10 42,10 56,10" fill="none" stroke="#8a8a93" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="version">v1.64.0</span>
+            </div>
+
+            <footer class="card-foot">
+              <span class="updated">01-12 · 更新</span>
+              <a class="read" href="#">详细原文 ↗</a>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <!-- 03 低优先 -->
+      <section class="group">
+        <header class="group-header">
+          <div class="group-title">
+            <span class="group-index">03</span>
+            <span class="group-name">低优先</span>
+            <span class="group-sub">偶尔看</span>
+          </div>
+          <div class="group-meta">1 条 · 本周 <b>+0</b></div>
+        </header>
+
+        <div class="grid">
+          <!-- 卡片 4 -->
+          <article class="card">
+            <div class="card-head">
+              <div class="card-group">
+                <span class="dot blue"></span>
+                <span>低优先</span>
+              </div>
+              <span class="ep">NO EP.</span>
+            </div>
+
+            <h2 class="card-name">Homebrew</h2>
+
+            <div class="summary">
+              <span class="vs">vs 4.4.1</span>
+              <span>· 修复安装脚本的路径转义；近期提交稀疏。</span>
+            </div>
+
+            <div class="meta">
+              <span>★ 41.3k</span>
+              <svg width="56" height="18" viewBox="0 0 56 18" aria-hidden="true">
+                <polyline points="0,10 14,10 28,10 42,10 56,10" fill="none" stroke="#8a8a93" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" />
+              </svg>
+              <span class="version">v4.4.2</span>
+            </div>
+
+            <footer class="card-foot">
+              <span class="updated">12-29 · 更新</span>
+              <a class="read" href="#">详细原文 ↗</a>
+            </footer>
+          </article>
+        </div>
+      </section>
+
+      <!-- 04 备选池 -->
+      <section class="group">
+        <header class="group-header">
+          <div class="group-title">
+            <span class="group-index">04</span>
+            <span class="group-name">备选池</span>
+            <span class="group-sub">待定</span>
+          </div>
+          <div class="group-meta">0 条 · 本周 <b>+0</b></div>
+        </header>
+        <div class="grid"></div>
+      </section>
+
+    </section>
+
+  </main>
+
+  <div class="float-search">🔍 搜索知识库 <kbd>⌘K</kbd></div>
+  <div class="float-dock">
+    <span>📂 看板</span>
+    <span>/</span>
+    <span>🪄 AI 总结</span>
+    <span>/</span>
+    <span>⚙ 设置</span>
+  </div>
+</body>
+</html>

@@ -1,13 +1,22 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	advanceProjectBaseline,
+	buildGlobalIndexRow,
+	buildMergedWeeklySummary,
 	buildProjectReportPrompt,
+	detectProjectIncrements,
+	emptyProjectBaseline,
+	escapeMarkdownTableCell,
+	escapeYamlValue,
 	parseCommits,
 	parseIssues,
 	parseRepoFullName,
 	parseRepoInfo,
 	parseReleases,
+	previousVersionTag,
 } from '../src/application/githubTracker.ts';
+import { normalizeProjectTrackerSettings } from '../src/data/dashboardTypes.ts';
 import type { RepoSnapshot } from '../src/data/dashboardTypes.ts';
 
 test('parseRepoFullName accepts valid owner/repo', () => {
@@ -111,4 +120,100 @@ test('buildProjectReportPrompt handles empty activity', () => {
 	};
 	const prompt = buildProjectReportPrompt(snapshot);
 	assert.match(prompt, /（无）/);
+});
+
+test('detectProjectIncrements returns new releases, commits and issues', () => {
+	const snapshot: RepoSnapshot = {
+		fullName: 'a/b',
+		stars: 10,
+		description: '',
+		updatedAt: '2026-08-03T00:00:00Z',
+		releases: [{ tag: 'v1.1.0', name: 'Release', publishedAt: '2026-08-02T00:00:00Z', body: 'Added X', url: 'u' }],
+		commits: [{ sha: 'abc1234', message: 'feat: x', date: '2026-08-02T00:00:00Z', url: 'u' }],
+		issues: [{ title: 'Bug', kind: 'issue', state: 'open', updatedAt: '2026-08-02T00:00:00Z', url: 'u' }],
+		fetchedAt: '2026-08-03T00:00:00Z',
+	};
+	const baseline = emptyProjectBaseline('1970-01-01T00:00:00.000Z');
+	const increments = detectProjectIncrements(snapshot, baseline);
+	assert.equal(increments.length, 3);
+	assert.equal(increments[0]?.kind, 'release');
+	assert.equal(increments[1]?.kind, 'commit');
+	assert.equal(increments[2]?.kind, 'issue');
+});
+
+test('advanceProjectBaseline remembers seen activity and keeps star history bounded', () => {
+	const snapshot: RepoSnapshot = {
+		fullName: 'a/b',
+		stars: 12,
+		description: '',
+		updatedAt: '2026-08-03T00:00:00Z',
+		releases: [{ tag: 'v1.0.0', name: '', publishedAt: '2026-08-01T00:00:00Z', body: '', url: 'u' }],
+		commits: [{ sha: 'abc1234', message: 'feat', date: '2026-08-01T00:00:00Z', url: 'u' }],
+		issues: [],
+		fetchedAt: '2026-08-03T00:00:00Z',
+	};
+	const advanced = advanceProjectBaseline(snapshot, emptyProjectBaseline('1970-01-01T00:00:00.000Z'), '2026-08-03T00:00:00Z');
+	assert.deepEqual(advanced.knownReleaseTags, ['v1.0.0']);
+	assert.deepEqual(advanced.seenCommits, ['abc1234']);
+	assert.equal(advanced.starHistory.length, 1);
+	assert.equal(advanced.starHistory[0]?.stars, 12);
+});
+
+test('previousVersionTag uses second release or baseline tag', () => {
+	const snapshot: RepoSnapshot = {
+		fullName: 'a/b',
+		stars: 0,
+		description: '',
+		updatedAt: '',
+		releases: [
+			{ tag: 'v2.0.0', name: '', publishedAt: '2026-08-02T00:00:00Z', body: '', url: 'u' },
+			{ tag: 'v1.0.0', name: '', publishedAt: '2026-08-01T00:00:00Z', body: '', url: 'u' },
+		],
+		commits: [],
+		issues: [],
+		fetchedAt: '2026-08-03T00:00:00Z',
+	};
+	assert.equal(previousVersionTag(snapshot, emptyProjectBaseline()), 'v1.0.0');
+});
+
+test('buildMergedWeeklySummary combines multiple increments', () => {
+	const summary = buildMergedWeeklySummary([
+		{ kind: 'commit', title: 'fix a', detail: 'x', date: '2026-08-02T00:00:00Z', url: '' },
+		{ kind: 'release', title: 'v1.2.0', detail: 'release', date: '2026-08-02T00:00:00Z', url: '' },
+	]);
+	assert.match(summary, /本周合并 2 项/);
+	assert.match(summary, /fix a/);
+});
+
+test('normalizeProjectTrackerSettings preserves an empty projects array', () => {
+	const settings = normalizeProjectTrackerSettings({ projects: [] });
+	assert.deepEqual(settings.projects, []);
+});
+
+test('normalizeProjectTrackerSettings migrates legacy repos', () => {
+	const settings = normalizeProjectTrackerSettings({ repos: ['a/b'] });
+	assert.equal(settings.projects.length, 1);
+	assert.equal(settings.projects[0]?.repo, 'a/b');
+	assert.equal(settings.projects[0]?.groupId, 'p1');
+});
+
+test('buildGlobalIndexRow keeps eight markdown cells', () => {
+	const row = buildGlobalIndexRow(
+		{ repo: 'a/b', groupId: 'p1', series: 'AI工具', enabled: true },
+		{ name: '01 高优先' },
+		{ stars: 10, updatedAt: '2026-08-01T00:00:00Z', releases: [{ tag: 'v1.0.0', name: '', publishedAt: '', body: '', url: '' }], error: undefined },
+		'Projects',
+	);
+	assert.equal(row.split('|').filter((cell) => cell.trim().length > 0).length, 8);
+});
+
+test('escapeYamlValue quotes values with special characters', () => {
+	assert.equal(escapeYamlValue('plain'), 'plain');
+	assert.equal(escapeYamlValue('a: b'), '"a: b"');
+	assert.equal(escapeYamlValue('has # tag'), '"has # tag"');
+});
+
+test('escapeMarkdownTableCell escapes pipes and newlines', () => {
+	assert.equal(escapeMarkdownTableCell('a|b'), 'a\\|b');
+	assert.equal(escapeMarkdownTableCell('a\nb'), 'a b');
 });

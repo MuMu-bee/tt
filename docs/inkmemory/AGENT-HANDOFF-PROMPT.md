@@ -33,6 +33,7 @@
 - **知识星图**：Canvas 力导向图展示笔记关联，支持图谱透镜筛选
 - **每日热点**：聚合公开热点，卡片式排名展示
 - **8 页面导航**：总览 / 知识库 / 知识星图 / 任务与计划 / 项目追踪 / 每日热点 / 对话 / 设置
+- **GitHub 项目追踪**：优先级分组看板、增量基线、AI 中文摘要、NEW 折叠块、状态 Tab/搜索/系列筛选/合并周报、Projects 笔记沉淀、专用设置 Modal
 
 ## 三、当前真实状态（截至 2026-08-17，HEAD `edbb9b2`）
 
@@ -46,7 +47,7 @@
 - **每日热点**：6 条热点卡片，排名 + 分类标签 + 热度数据
 - **页面切换**：8 页面导航（总览/知识库/知识星图/任务与计划/项目追踪/每日热点/对话/设置），`showPage()` 机制
 - **CSS 重写**：使用 Obsidian 原生 CSS 变量替代自定义 `--agent-*` 变量，自动跟随主题
-- **测试 101/101**（`npm test`）；`npm run build`、`tsc --noEmit -skipLibCheck`、`git diff --check` 通过；`npm run lint` 为 0 error、22 warnings
+- **测试 141/141**（`npm test`）；`npm run build` 通过；`npm run lint` 0 error（存在既有 warning）
 - 当前没有本次审查范围内的真实 Obsidian 桌面 smoke test 证据；不能把 Node 测试结果当作桌面验证
 - 当前 `main` 已推送到 GitHub，HEAD 为 `edbb9b2`；`0.1.0` Release 仍来自旧 tag `3f7ffc2`
 
