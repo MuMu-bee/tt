@@ -11,6 +11,7 @@ import {
 	escapeYamlValue,
 	parseCommits,
 	parseIssues,
+	parseReleaseNotes,
 	parseRepoFullName,
 	parseRepoInfo,
 	parseReleases,
@@ -216,4 +217,35 @@ test('escapeYamlValue quotes values with special characters', () => {
 test('escapeMarkdownTableCell escapes pipes and newlines', () => {
 	assert.equal(escapeMarkdownTableCell('a|b'), 'a\\|b');
 	assert.equal(escapeMarkdownTableCell('a\nb'), 'a b');
+});
+
+test('parseReleaseNotes parses strict 【tag|date|summary】rows', () => {
+	const notes = parseReleaseNotes([
+		'【v1.3.0|2026-08-05T00:00:00Z|新增多轮数学推理与中英混合提示词】',
+		'【v1.2.1|2026-07-20T00:00:00Z|修复推理服务内存泄漏】',
+		'无关行',
+		'',
+	].join('\n'));
+	assert.equal(notes.length, 2);
+	assert.equal(notes[0]?.tag, 'v1.3.0');
+	assert.equal(notes[0]?.date, '2026-08-05T00:00:00Z');
+	assert.match(notes[0]?.summary ?? '', /多轮数学推理/u);
+	assert.equal(notes[1]?.tag, 'v1.2.1');
+});
+
+test('parseReleaseNotes caps at 3 versions and ignores junk', () => {
+	const lines: string[] = [];
+	for (let index = 0; index < 5; index += 1) {
+		lines.push('【v1.' + index + '|2026-01-0' + index + 'T00:00:00Z|更新' + index + '】');
+	}
+	const notes = parseReleaseNotes(lines.join('\n'));
+	assert.ok(notes.length <= 3);
+	assert.equal(notes.length, 3);
+});
+
+test('parseReleaseNotes falls back to pipe-split rows without brackets', () => {
+	const notes = parseReleaseNotes('v2.0.0 | 2026-08-01T00:00:00Z | 全新 UI\n冒烟');
+	assert.equal(notes.length, 1);
+	assert.equal(notes[0]?.tag, 'v2.0.0');
+	assert.equal(notes[0]?.date, '2026-08-01T00:00:00Z');
 });

@@ -2,15 +2,15 @@ import { Notice, normalizePath, setIcon } from 'obsidian';
 import { createRequestContext, type RequestContext } from '../application/requestContext';
 import type {
 	ProjectGroup,
-	ProjectIncrementItem,
 	ProjectTrackerSettings,
+	RepoSnapshot,
 	StarPoint,
 } from '../data/dashboardTypes';
 import type { ProjectCheckResult, ProjectTracker } from '../services/projectTracker';
 import type { ProjectReportService } from '../services/projectReportService';
 import type { WorkbenchWriteService } from '../services/workbenchWriteService';
 import { showActionError } from '../services/agentActionService';
-import { buildMergedWeeklySummary, previousVersionTag, recentStarPoints } from '../application/githubTracker';
+import { buildMergedWeeklySummary, previousVersionTag, recentStarPoints, type ReleaseNote } from '../application/githubTracker';
 
 export type ProjectBoardTab = 'all' | 'updates' | 'stale' | 'paused';
 
@@ -315,44 +315,66 @@ function renderProjectCard(host: ProjectPageHost, grid: HTMLElement, result: Pro
 function renderNewBlock(host: ProjectPageHost, card: HTMLElement, result: ProjectCheckResult, vs: string): void {
 	const { snapshot, increments } = result;
 	if (snapshot.releases.length === 0 && snapshot.commits.length === 0 && snapshot.issues.length === 0) return;
-	const block = card.createDiv({ cls: 'agent-dashboard-project-new' });
+	const merged = host.boardState.mergeWeekly;
+	const block = card.createDiv({ cls: 'agent-dashboard-project-new' + (merged ? ' is-merged' : '') });
 	const header = block.createEl('button', { cls: 'agent-dashboard-project-new__header', attr: { type: 'button' } });
 	header.createSpan({ cls: 'agent-dashboard-project-new__chip', text: 'NEW' });
 	const label = header.createSpan({ cls: 'agent-dashboard-project-new__label' });
+	const count = header.createSpan({ cls: 'agent-dashboard-project-new__count' });
 	const arrow = header.createSpan({ cls: 'agent-dashboard-project-new__arrow' });
 	const body = block.createDiv({ cls: 'agent-dashboard-project-new__body' });
 
-	const hasNewCommits = increments.some((item) => item.kind === 'commit');
-	label.createSpan({ text: hasNewCommits ? '本次重要更新（自 ' + vs + ' 后）' : '最近重要更新' });
-	body.hidden = true;
-	body.createDiv({ cls: 'agent-dashboard-project-new__loading', text: '正在生成中文更新摘要…' });
-	setIcon(arrow, 'chevron-right');
+	label.createSpan({ text: merged ? '本周合并' : (increments.some((item) => item.kind === 'commit') ? '近期重要更新' : '近期版本更新') });
+	count.createSpan({ text: merged ? '（' + String(increments.length) + ' 项）' : '（' + String(projectVersionCount(snapshot)) + ' 个版本）' });
+	body.hidden = !merged;
+	const placeholder = body.createDiv({ cls: 'agent-dashboard-project-new__loading', text: '正在生成中文更新摘要…' });
+	setIcon(arrow, merged ? 'chevron-down' : 'chevron-right');
 
 	host.registerDomEvent(header, 'click', () => {
 		body.hidden = !body.hidden;
 		setIcon(arrow, body.hidden ? 'chevron-right' : 'chevron-down');
 	});
 
-	void loadRecentUpdates(host, result, body, hasNewCommits);
+	void loadReleaseNotes(host, result, body, placeholder, merged);
 }
 
-async function loadRecentUpdates(host: ProjectPageHost, result: ProjectCheckResult, body: HTMLElement, hasNewCommits: boolean): Promise<void> {
+function projectVersionCount(snapshot: RepoSnapshot): number {
+	return snapshot.releases.length > 0 ? snapshot.releases.slice(0, 3).length : 1;
+}
+
+async function loadReleaseNotes(
+	host: ProjectPageHost,
+	result: ProjectCheckResult,
+	body: HTMLElement,
+	placeholder: HTMLElement | null,
+	merged: boolean,
+): Promise<void> {
 	await enqueueSummary(async () => {
-		try {
-			const generated = await host.projectReport.generateRecentUpdates(result.snapshot, createRequestContext('background-task'));
-			if (host.isClosed()) return;
+		if (merged) {
+			placeholder?.empty();
 			body.empty();
-			if (generated.items.length === 0) {
-				body.createDiv({ cls: 'agent-dashboard-project-new__merged', text: generated.error ?? '暂无中文更新摘要。' });
-				return;
-			}
-			generated.items.forEach((text) => {
-				const row = body.createDiv({ cls: 'agent-dashboard-project-new__item' });
-				row.createSpan({ cls: 'agent-dashboard-project-new__summary', text });
-			});
-		} catch {
-			if (!host.isClosed()) body.createDiv({ cls: 'agent-dashboard-project-new__merged', text: '中文更新摘要生成失败（请检查模型配置）。' });
+			body.createDiv({ cls: 'agent-dashboard-project-new__merged', text: buildMergedWeeklySummary(result.increments) });
+			return;
 		}
+		let notes: ReleaseNote[];
+		try {
+			const generated = await host.projectReport.generateReleaseNotes(result.snapshot, createRequestContext('background-task'));
+			notes = generated.notes;
+		} catch {
+			notes = [];
+		}
+		if (host.isClosed()) return;
+		body.empty();
+		if (notes.length === 0) {
+			body.createDiv({ cls: 'agent-dashboard-project-new__merged', text: '暂无各版本的中文更新摘要（请检查模型配置）。' });
+			return;
+		}
+		notes.forEach((note) => {
+			const row = body.createDiv({ cls: 'agent-dashboard-project-new__version' });
+			row.createDiv({ cls: 'agent-dashboard-project-new__version-title' }).createSpan({ cls: 'agent-dashboard-project-new__version-tag', text: note.tag || '最近' });
+			if (note.date) row.createDiv({ cls: 'agent-dashboard-project-new__version-title' }).createSpan({ cls: 'agent-dashboard-project-new__version-date', text: shortDate(note.date) });
+			row.createDiv({ cls: 'agent-dashboard-project-new__version-summary', text: note.summary });
+		});
 	});
 }
 

@@ -15,8 +15,11 @@ import {
 	buildMergedWeeklySummary,
 	buildProjectReportPrompt,
 	buildRecentUpdatesPrompt,
+	buildReleaseNotesPrompt,
 	buildVsSummaryPrompt,
 	escapeYamlValue,
+	parseReleaseNotes,
+	type ReleaseNote,
 } from '../application/githubTracker';
 import type { ProjectCheckResult } from './projectTracker';
 
@@ -32,6 +35,11 @@ export interface VsSummaryResult {
 
 export interface RecentUpdatesResult {
 	items: string[];
+	error?: string;
+}
+
+export interface ReleaseNotesResult {
+	notes: ReleaseNote[];
 	error?: string;
 }
 
@@ -101,6 +109,23 @@ export class ProjectReportService {
 			return {
 				items: [],
 				error: error instanceof Error ? error.message : '最近更新摘要生成失败',
+			};
+		}
+	}
+
+	/** Produces per-version Chinese feature summaries (tag + date + what changed). */
+	async generateReleaseNotes(snapshot: RepoSnapshot, context: RequestContext): Promise<ReleaseNotesResult> {
+		if (snapshot.releases.length === 0 && snapshot.commits.length === 0) {
+			return { notes: [], error: snapshot.error ? '拉取失败：' + snapshot.error : '暂无最近更新' };
+		}
+		try {
+			const raw = await this.model.generate(buildReleaseNotesPrompt(snapshot), context);
+			const notes = parseReleaseNotes(raw);
+			return { notes };
+		} catch (error) {
+			return {
+				notes: [],
+				error: error instanceof Error ? error.message : '版本更新摘要生成失败',
 			};
 		}
 	}

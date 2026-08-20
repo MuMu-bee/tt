@@ -344,6 +344,76 @@ export function buildRecentUpdatesPrompt(snapshot: RepoSnapshot): string {
 	return lines.join('\n');
 }
 
+export interface ReleaseNote {
+	tag: string;
+	name?: string;
+	date: string;
+	summary: string;
+}
+
+/** Prompt to get per-version Chinese feature summaries for the NEW block. */
+export function buildReleaseNotesPrompt(snapshot: RepoSnapshot): string {
+	const lines: string[] = [];
+	lines.push('你是 GitHub 项目版本更新的中文编辑。请根据下面这个项目最近的少数几个版本，逐版本用一句话总结该版本相比上一个版本更新/新增/修复了什么功能。');
+	lines.push('要求：');
+	lines.push('1. 每个版本输出一行，格式严格为：【版本号|发布日期|一句话中文摘要】；');
+	lines.push('2. 只输出这些行，不要标题、编号、Markdown 或额外解释；');
+	lines.push('3. 摘要要说明这个版本做了什么，不要只罗列版本号；若某版本无实质内容则写"小修小改"；');
+	lines.push('4. 按时间从新到旧排列，最多 3 个版本。');
+	lines.push('');
+	lines.push('项目：' + snapshot.fullName);
+	lines.push('');
+	lines.push('【版本发布】');
+	if (snapshot.releases.length === 0) {
+		lines.push('（无发布记录）');
+	} else {
+		snapshot.releases.slice(0, 4).forEach((release) => {
+			lines.push('- ' + release.tag + (release.name ? ' (' + release.name + ')' : '') + ' 发布自 ' + release.publishedAt);
+			if (release.body) lines.push('  ' + release.body.replace(/\s+/gu, ' ').trim().slice(0, 500));
+		});
+	}
+	lines.push('');
+	lines.push('【最近提交】');
+	if (snapshot.commits.length === 0) {
+		lines.push('（无）');
+	} else {
+		snapshot.commits.slice(0, 8).forEach((commit) => {
+			lines.push('- ' + commit.message);
+		});
+	}
+	return lines.join('\n');
+}
+
+/** Minimal structured parser for the per-version summary rows produced above. */
+export function parseReleaseNotes(raw: string): ReleaseNote[] {
+	const notes: ReleaseNote[] = [];
+	for (const line of raw.split(/\n+/u)) {
+		const trimmed = line.trim();
+		if (!trimmed) continue;
+		const bracketed = trimmed.startsWith('【');
+		const body = bracketed ? trimmed.replace(/^【/u, '').replace(/】+$/u, '').trim() : trimmed;
+		const parts = body.split('|');
+		let tag = '';
+		let date = '';
+		let summary = '';
+		if (parts.length >= 3) {
+			tag = (parts[0] ?? '').trim();
+			date = (parts[1] ?? '').trim();
+			summary = (parts.slice(2).join('|') ?? '').trim();
+		} else if (parts.length === 2) {
+			tag = (parts[0] ?? '').trim();
+			summary = (parts[1] ?? '').trim();
+		} else {
+			if (!bracketed) continue;
+			tag = parts[0] ?? '';
+			summary = '';
+		}
+		if (!tag && !summary) continue;
+		notes.push({ tag, date, summary });
+	}
+	return notes.slice(0, 3);
+}
+
 /** Escapes a cell value for Markdown tables. */
 export function escapeMarkdownTableCell(value: string): string {
 	return value
